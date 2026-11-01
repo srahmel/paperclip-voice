@@ -65,6 +65,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const thresholdRef = useRef(0.035);
   const [conciseReply, setConciseReply] = useState(true);
   const conciseReplyRef = useRef(true);
+  const [language, setLanguage] = useState<'de' | 'en'>('de');
 
   const epochRef = useRef(0); // invalidates asynchronous work on stop/company change
   const streamRef = useRef<MediaStream | null>(null);
@@ -142,8 +143,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function sayStatus(status: string, epoch: number): Promise<void> {
-    const messages: Record<string, string> = { submitted: 'Gesendet.', no_speech: 'Ich habe nichts verstanden.' };
-    const result = await speakLocal(companyId, messages[status] ?? status);
+    const messages: Record<string, string> = language === 'en'
+      ? { submitted: 'Sent.', no_speech: 'I did not understand.' }
+      : { submitted: 'Gesendet.', no_speech: 'Ich habe nichts verstanden.' };
+    const result = await speakLocal(companyId, messages[status] ?? status, language);
     await playAudio(result, epoch);
   }
 
@@ -158,7 +161,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       for (const comment of comments) seenCommentIdsRef.current.add(comment.id);
       if (newReplies.length) {
         const latest = newReplies[newReplies.length - 1];
-        const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text);
+        const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text, language);
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch);
         if (!active(epoch)) return;
@@ -205,7 +208,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       setPhase('transcribing');
       if (blob.size < 500 || blob.size > 2 * 1024 * 1024) throw new Error('Audioaufnahme ist zu kurz oder zu groß (max. 2 MiB).');
-      const text = await transcribeLocal(companyId, blob);
+      const text = await transcribeLocal(companyId, blob, language);
       if (!active(epoch)) return;
       if (!text) {
         await sayStatus('no_speech', epoch);
@@ -245,7 +248,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
           silenceIntervalRef.current = null;
           const latest = newReplies[newReplies.length - 1];
-          const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text);
+          const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text, language);
           if (!active(epoch)) return;
           setLastReply(latest.body ?? '');
           await playAudio(spoken, epoch);
@@ -359,7 +362,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       </header>
       <p style={P.muted}>Lokales Whisper + Piper · Original-Paperclip-Chat · Windows / Linux</p>
       <p><strong>Status:</strong> {({ off: 'Aus', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
-      <p style={P.muted}>Lokale Whisper- und Piper-Laufzeit · automatische Spracherkennung</p>
+      <p style={P.muted}>Lokale Whisper- und Piper-Laufzeit</p>
+      <label htmlFor="voice-language">Sprache</label>
+      <select id="voice-language" style={P.field} value={language} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
+        <option value="de">Deutsch</option><option value="en">English</option>
+      </select>
       <label htmlFor="voice-target" style={{ display: 'block', marginTop: 8 }}>Zielkonversation</label>
       <select id="voice-target" style={P.field} value={target ? `${target.kind}:${target.ref}` : ''} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => {
         if (!event.target.value) return setTarget(null);

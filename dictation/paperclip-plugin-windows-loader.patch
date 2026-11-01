@@ -1,0 +1,46 @@
+From d6545ef1f743a4df15cfe57ab64dbe4f8a3e7cd6 Mon Sep 17 00:00:00 2001
+From: srahmel <s.rahmel@encurio.com>
+Date: Sun, 1 Nov 2026 18:38:09 +0100
+Subject: [PATCH] Fix plugin loader imports on Windows
+
+---
+ server/src/__tests__/plugin-windows-loader.test.mjs | 13 +++++++++++++
+ server/src/services/plugin-loader.ts                |  2 +-
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+ create mode 100644 server/src/__tests__/plugin-windows-loader.test.mjs
+
+diff --git a/server/src/__tests__/plugin-windows-loader.test.mjs b/server/src/__tests__/plugin-windows-loader.test.mjs
+new file mode 100644
+index 000000000..686877fcc
+--- /dev/null
++++ b/server/src/__tests__/plugin-windows-loader.test.mjs
+@@ -0,0 +1,13 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { spawnSync } from 'node:child_process';
++import { createRequire } from 'node:module';
++import { pathToFileURL } from 'node:url';
++
++test('the plugin TypeScript loader can be imported by a child Node process', () => {
++  const require = createRequire(new URL('../../../cli/package.json', import.meta.url));
++  const loader = require.resolve('tsx');
++  const result = spawnSync(process.execPath, ['--import', pathToFileURL(loader).href, '-e', "process.stdout.write('ready')"], { encoding: 'utf8', timeout: 15000 });
++  assert.equal(result.status, 0, result.stderr);
++  assert.equal(result.stdout, 'ready');
++});
+diff --git a/server/src/services/plugin-loader.ts b/server/src/services/plugin-loader.ts
+index c07e48ac2..ae60f2601 100644
+--- a/server/src/services/plugin-loader.ts
++++ b/server/src/services/plugin-loader.ts
+@@ -2351,7 +2351,7 @@ export function pluginLoader(
+       // (for example @paperclipai/shared exports). Run those workers through
+       // the tsx loader so first-party example plugins work in development.
+       if (activePlugin.packagePath && existsSync(DEV_TSX_LOADER_PATH)) {
+-        workerOptions.execArgv = ["--import", DEV_TSX_LOADER_PATH];
++        workerOptions.execArgv = ["--import", pathToFileURL(DEV_TSX_LOADER_PATH).href];
+       }
+ 
+       await workerManager.startWorker(pluginId, workerOptions);
+-- 
+2.47.1.windows.2
+
