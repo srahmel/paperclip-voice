@@ -1,0 +1,456 @@
+diff --git a/server/src/__tests__/local-speech.test.ts b/server/src/__tests__/local-speech.test.ts
+new file mode 100644
+index 000000000..aceda6012
+--- /dev/null
++++ b/server/src/__tests__/local-speech.test.ts
+@@ -0,0 +1,68 @@
++import express from "express";
++import request from "supertest";
++import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterAll, beforeAll, describe, expect, it } from "vitest";
++import { boardMutationGuard } from "../middleware/board-mutation-guard.js";
++import { localSpeechRoutes } from "../routes/local-speech.js";
++
++let directory: string;
++const prior = { python: process.env.PAPERCLIP_TTS_PYTHON, worker: process.env.PAPERCLIP_TTS_WORKER, models: process.env.PAPERCLIP_TTS_MODEL_DIR };
++beforeAll(() => {
++  directory = mkdtempSync(join(tmpdir(), "paperclip-tts-test-"));
++  writeFileSync(join(directory, "worker.cjs"), `process.stdin.resume();process.stdin.on('end',()=>{const b=Buffer.alloc(44);b.write('RIFF',0);b.write('WAVE',8);process.stdout.write(b)});`);
++});
++afterAll(() => {
++  for (const [name, value] of Object.entries({ PAPERCLIP_TTS_PYTHON: prior.python, PAPERCLIP_TTS_WORKER: prior.worker, PAPERCLIP_TTS_MODEL_DIR: prior.models })) {
++    if (value === undefined) delete process.env[name]; else process.env[name] = value;
++  }
++  rmSync(directory, { recursive: true, force: true });
++});
++const company = "company-1";
++const session = { type: "board", source: "session", userId: "u1", companyIds: [company] };
++function app(actor: Record<string, unknown>) {
++  const server = express(); server.use(express.json());
++  server.use((req, _res, next) => { Object.assign(req, { actor }); next(); });
++  server.use(boardMutationGuard()); server.use(localSpeechRoutes());
++  server.use((err: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(err.status ?? 500).json({ error: "denied" }));
++  return server;
++}
++function send(server: express.Express, body = { text: "Hello", language: "de" }) {
++  return request(server).post(`/companies/${company}/local-speech`).set("Origin", "http://localhost:3100").send(body);
++}
++function mockWorker() {
++  process.env.PAPERCLIP_TTS_PYTHON = process.execPath;
++  process.env.PAPERCLIP_TTS_WORKER = join(directory, "worker.cjs");
++  process.env.PAPERCLIP_TTS_MODEL_DIR = directory;
++}
++describe("local speech endpoint", () => {
++  it("rejects unauthenticated, other-company and agent-key requests", async () => {
++    expect((await send(app({ type: "none" }))).status).toBe(401);
++    expect((await send(app({ ...session, companyIds: ["other"] }))).status).toBe(403);
++    expect((await send(app({ type: "agent", companyId: company }))).status).toBe(403);
++    expect((await send(app({ ...session, source: "board_key" }))).status).toBe(403);
++  });
++  it("enforces browser origin and text and language bounds", async () => {
++    expect((await request(app(session)).post(`/companies/${company}/local-speech`).set("Origin", "https://evil.example").send({ text: "a", language: "de" })).status).toBe(403);
++    expect((await send(app(session), { text: "x".repeat(4001), language: "de" })).status).toBe(400);
++    expect((await send(app(session), { text: "a", language: "fr" })).status).toBe(400);
++  });
++  it("returns bounded WAV data without caching", async () => {
++    mockWorker(); const result = await send(app(session));
++    expect(result.status).toBe(200); expect(result.headers["content-type"]).toContain("audio/wav");
++    expect(result.headers["cache-control"]).toBe("no-store"); expect(result.body.subarray(0, 4).toString()).toBe("RIFF");
++  });
++  it("handles a missing worker without exposing local details", async () => {
++    mockWorker(); process.env.PAPERCLIP_TTS_PYTHON = join(directory, "missing.exe");
++    const result = await send(app(session)); expect(result.status).toBe(503); expect(JSON.stringify(result.body)).not.toContain(directory);
++  });
++  it.skipIf(!process.env.PAPERCLIP_TEST_TTS_PYTHON)("synthesizes real local Piper audio through the route", async () => {
++    process.env.PAPERCLIP_TTS_PYTHON = process.env.PAPERCLIP_TEST_TTS_PYTHON;
++    process.env.PAPERCLIP_TTS_WORKER = process.env.PAPERCLIP_TEST_TTS_WORKER;
++    process.env.PAPERCLIP_TTS_MODEL_DIR = process.env.PAPERCLIP_TEST_TTS_MODEL_DIR;
++    const result = await send(app(session), { text: "Dies ist ein Test.", language: "de" });
++    expect(result.status).toBe(200); expect(result.body.length).toBeGreaterThan(1000);
++    expect(result.body.toString("ascii", 0, 4)).toBe("RIFF");
++  }, 90_000);
++});
+diff --git a/server/src/app.ts b/server/src/app.ts
+index 45063aedb..8b62d5955 100644
+--- a/server/src/app.ts
++++ b/server/src/app.ts
+@@ -1,5 +1,6 @@
+ import { promptInjectionPreventionRoutes } from "./routes/prompt-injection-prevention.js";
+ import { localDictationRoutes } from "./routes/local-dictation.js";
++import { localSpeechRoutes } from "./routes/local-speech.js";
+ import { voiceSessionRoutes, voiceWebhookRoutes } from "./routes/voice-sessions.js";
+ import { eq } from "drizzle-orm";
+ import { chatEndpoints } from "@paperclipai/db";
+@@ -753,6 +754,7 @@ export async function createApp(
+   api.use(agentAvatars.router);
+   api.use(boardMutationGuard());
+   api.use(localDictationRoutes());
++  api.use(localSpeechRoutes());
+   api.use("/health", health);
+   api.use(openApiRoutes());
+   api.use("/cloud", cloudRoutes());
+diff --git a/server/src/routes/local-speech.ts b/server/src/routes/local-speech.ts
+new file mode 100644
+index 000000000..55f0b3000
+--- /dev/null
++++ b/server/src/routes/local-speech.ts
+@@ -0,0 +1,67 @@
++import { Router } from "express";
++import { spawn } from "node:child_process";
++import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
++
++const MAX_WAV = 16 * 1024 * 1024;
++let active = false;
++
++/** Authenticated, bounded, one-shot local TTS; no audio listener or files. */
++export function localSpeechRoutes() {
++  const router = Router();
++  router.post("/companies/:companyId/local-speech", (req, res) => {
++    assertAuthenticated(req);
++    assertBoard(req);
++    assertCompanyAccess(req, req.params.companyId as string);
++    if (req.actor.source !== "session") return res.status(403).json({ error: "A signed-in browser session is required" });
++    res.setHeader("Cache-Control", "no-store");
++    const text = req.body?.text;
++    const language = req.body?.language;
++    if (typeof text !== "string" || !text.trim() || text.length > 4000 || !["de", "en"].includes(language)) {
++      return res.status(400).json({ error: "Invalid speech request" });
++    }
++    const python = process.env.PAPERCLIP_TTS_PYTHON;
++    const worker = process.env.PAPERCLIP_TTS_WORKER;
++    const models = process.env.PAPERCLIP_TTS_MODEL_DIR;
++    if (!python || !worker || !models) return res.status(503).json({ error: "Local speech is unavailable" });
++    if (active) return res.status(429).json({ error: "Local speech is busy" });
++    active = true;
++    const child = spawn(python, [worker], {
++      windowsHide: true,
++      stdio: ["pipe", "pipe", "ignore"],
++      env: {
++        SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
++        PATH: process.env.PATH, TEMP: process.env.TEMP, TMP: process.env.TMP,
++        PAPERCLIP_TTS_MODEL_DIR: models, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8",
++        HF_HUB_OFFLINE: "1", OMP_NUM_THREADS: "4", OPENBLAS_NUM_THREADS: "1",
++      },
++    });
++    const chunks: Buffer[] = [];
++    let size = 0;
++    let finished = false;
++    const timer = setTimeout(() => child.kill(), 90_000);
++    const finish = (code: number, audio?: Buffer) => {
++      if (finished) return;
++      finished = true;
++      clearTimeout(timer);
++      active = false;
++      if (res.destroyed || res.headersSent) return;
++      if (audio) res.status(200).type("audio/wav").send(audio);
++      else res.status(code).json({ error: "Local speech failed or timed out" });
++    };
++    res.on("close", () => { if (!res.writableFinished) child.kill(); });
++    child.stdout.on("data", (chunk: Buffer) => {
++      size += chunk.length;
++      if (size > MAX_WAV) child.kill(); else chunks.push(chunk);
++    });
++    child.stdin.on("error", () => {});
++    child.on("error", () => finish(503));
++    child.on("close", (code) => {
++      if (code !== 0 || size > MAX_WAV) return finish(503);
++      const audio = Buffer.concat(chunks);
++      if (audio.length < 44 || audio.toString("ascii", 0, 4) !== "RIFF" || audio.toString("ascii", 8, 12) !== "WAVE") return finish(503);
++      finish(200, audio);
++    });
++    child.stdin.end(JSON.stringify({ text, language }));
++  });
++  return router;
++}
+diff --git a/ui/src/components/IssueChatThread.tsx b/ui/src/components/IssueChatThread.tsx
+index f05550b9a..7c018b2f4 100644
+--- a/ui/src/components/IssueChatThread.tsx
++++ b/ui/src/components/IssueChatThread.tsx
+@@ -5863,7 +5863,7 @@ export function IssueChatThread({
+   externalReferences,
+   linkCaseReferences = false,
+ }: IssueChatThreadProps) {
+-  const voiceReply = useVoiceReply(comments, draftKey ?? issueId);
++  const voiceReply = useVoiceReply(comments, draftKey ?? issueId, companyId);
+   const workspaceRetry = useCurrentWorkspaceRetry();
+   const location = useLocation();
+   const lastScrolledHashRef = useRef<string | null>(null);
+diff --git a/ui/src/components/TaskChatThread.tsx b/ui/src/components/TaskChatThread.tsx
+index 45daf8cd5..9178ac562 100644
+--- a/ui/src/components/TaskChatThread.tsx
++++ b/ui/src/components/TaskChatThread.tsx
+@@ -573,7 +573,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
+     resumeAssigneePending = false,
+     onOpenSkill,
+   } = props;
+-  const voiceReply = useVoiceReply(comments, draftKey ?? issueId);
++  const voiceReply = useVoiceReply(comments, draftKey ?? issueId, companyId);
+   const retryFailedRunHandler =
+     isTerminalIssueStatus(issueStatus) ||
+     interactions?.some((interaction) => interaction.status === "pending") ||
+diff --git a/ui/src/components/VoiceReply.test.tsx b/ui/src/components/VoiceReply.test.tsx
+index 0812e18fa..c4f73f6b6 100644
+--- a/ui/src/components/VoiceReply.test.tsx
++++ b/ui/src/components/VoiceReply.test.tsx
+@@ -7,66 +7,72 @@ import { appendVoiceTranscript, useVoiceReply, VoiceReplyControl, VOICE_SHORT_RE
+ (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+ 
++function mockAudio() {
++  const start = vi.fn(); const stop = vi.fn(); const close = vi.fn().mockResolvedValue(undefined);
++  const player = { connect: vi.fn(), start, stop, onended: null, buffer: null };
++  class FakeContext {
++    state = "running"; destination = {};
++    resume = vi.fn().mockResolvedValue(undefined);
++    close = close;
++    decodeAudioData = vi.fn().mockResolvedValue({});
++    createBufferSource = () => player;
++  }
++  vi.stubGlobal("AudioContext", FakeContext);
++  const request = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(44) });
++  vi.stubGlobal("fetch", request);
++  return { start, stop, close, request };
++}
++
+ describe("voice replies", () => {
+   it("keeps the short-answer request visible, editable and present only once", () => {
+     const first = appendVoiceTranscript("Existing", "Hallo");
+     expect(first).toBe(`Existing Hallo\n\n${VOICE_SHORT_REQUEST}`);
+-    const second = appendVoiceTranscript(first, "noch etwas");
+-    expect(second).toBe(`Existing Hallo noch etwas\n\n${VOICE_SHORT_REQUEST}`);
++    expect(appendVoiceTranscript(first, "noch etwas")).toBe(`Existing Hallo noch etwas\n\n${VOICE_SHORT_REQUEST}`);
+   });
+-  it("reads only a new agent reply after a dictated draft is submitted, and stops on unmount", async () => {
+-    const spoken = vi.fn();
+-    const cancel = vi.fn();
+-    const localVoice = { localService: true, lang: "de-DE", default: true };
+-    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [localVoice], speak: spoken, cancel } });
+-    vi.stubGlobal("SpeechSynthesisUtterance", class { text: string; constructor(text: string) { this.text = text; } });
++  it("synthesizes a new agent reply through Paperclip even when no browser voice exists", async () => {
++    const { request, start, stop, close } = mockAudio();
+     const old = { id: "old", body: "Old reply", authorType: "agent", createdAt: new Date() };
+     let voice!: ReturnType<typeof useVoiceReply>;
+     function Harness({ comments }: { comments: typeof old[] }) {
+-      voice = useVoiceReply(comments, "thread");
+-      return <VoiceReplyControl voice={voice} />;
++      voice = useVoiceReply(comments, "thread", "company"); return <VoiceReplyControl voice={voice} />;
+     }
+-    const container = document.createElement("div");
+-    const root = createRoot(container);
++    const container = document.createElement("div"); const root = createRoot(container);
+     await act(async () => { root.render(<Harness comments={[old]} />); });
+-    expect(spoken).not.toHaveBeenCalled();
+-    await act(async () => { voice.markDictated("de"); voice.beforeSubmit("My message"); });
++    expect(request).not.toHaveBeenCalled();
++    await act(async () => { voice.beginDictation(); voice.markDictated("de"); voice.beforeSubmit("My message"); });
+     await act(async () => { root.render(<Harness comments={[old, { id: "human", body: "message", authorType: "user", createdAt: new Date() }]} />); });
+-    expect(spoken).not.toHaveBeenCalled();
++    expect(request).not.toHaveBeenCalled();
+     await act(async () => { root.render(<Harness comments={[old, { id: "new", body: "Kurze Antwort.", authorType: "agent", createdAt: new Date() }]} />); });
+-    expect(spoken).toHaveBeenCalledTimes(1);
+-    expect(spoken.mock.calls[0]![0].text).toBe("Kurze Antwort.");
+-    expect(spoken.mock.calls[0]![0].voice).toBe(localVoice);
++    expect(request).toHaveBeenCalledTimes(1);
++    expect(request.mock.calls[0]![0]).toBe("/api/companies/company/local-speech");
++    expect(JSON.parse(request.mock.calls[0]![1].body)).toEqual({ text: "Kurze Antwort.", language: "de" });
++    expect(start).toHaveBeenCalledTimes(1);
+     await act(async () => root.unmount());
+-    expect(cancel).toHaveBeenCalledTimes(1);
++    expect(stop).toHaveBeenCalledTimes(1);
++    expect(close).toHaveBeenCalledTimes(1);
+   });
+-  it("does not use remote voices and shows an actionable error", async () => {
+-    const spoken = vi.fn();
+-    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [{ localService: false, lang: "de-DE" }], speak: spoken, cancel: vi.fn() } });
+-    vi.stubGlobal("SpeechSynthesisUtterance", class {});
++  it("shows a retryable error if the local TTS service fails", async () => {
++    const { request } = mockAudio(); request.mockResolvedValue({ ok: false });
+     let voice!: ReturnType<typeof useVoiceReply>;
+-    function Harness() { voice = useVoiceReply([], "thread"); return <VoiceReplyControl voice={voice} />; }
+-    const container = document.createElement("div");
+-    const root = createRoot(container);
++    function Harness() { voice = useVoiceReply([], "thread", "company"); return <VoiceReplyControl voice={voice} />; }
++    const container = document.createElement("div"); const root = createRoot(container);
+     await act(async () => { root.render(<Harness />); });
+     await act(async () => { voice.speak("Hallo"); });
+-    expect(spoken).not.toHaveBeenCalled();
+-    expect(container.textContent).toContain("Keine lokale Stimme");
++    expect(container.textContent).toContain("Vorlesen fehlgeschlagen");
++    expect(container.textContent).toContain("Erneut vorlesen");
+     await act(async () => root.unmount());
+   });
+   it("does not arm after the user disables output", async () => {
+-    const spoken = vi.fn();
+-    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [{ localService: true, lang: "de-DE" }], speak: spoken, cancel: vi.fn() } });
+-    vi.stubGlobal("SpeechSynthesisUtterance", class {});
++    const { request } = mockAudio();
+     let voice!: ReturnType<typeof useVoiceReply>;
+     function Harness({ comments }: { comments: { id: string; body: string; authorType: string; createdAt: Date }[] }) {
+-      voice = useVoiceReply(comments, "thread"); return <VoiceReplyControl voice={voice} />;
++      voice = useVoiceReply(comments, "thread", "company"); return <VoiceReplyControl voice={voice} />;
+     }
+     const container = document.createElement("div"); const root = createRoot(container);
+     await act(async () => { root.render(<Harness comments={[]} />); });
+     await act(async () => { voice.toggle(); voice.markDictated("de"); voice.beforeSubmit("message"); });
+     await act(async () => { root.render(<Harness comments={[{ id: "new", body: "reply", authorType: "agent", createdAt: new Date() }]} />); });
+-    expect(spoken).not.toHaveBeenCalled();
++    expect(request).not.toHaveBeenCalled();
+     await act(async () => root.unmount());
+   });
+ });
+diff --git a/ui/src/components/VoiceReply.tsx b/ui/src/components/VoiceReply.tsx
+index 35526303c..f9386b99d 100644
+--- a/ui/src/components/VoiceReply.tsx
++++ b/ui/src/components/VoiceReply.tsx
+@@ -27,7 +27,7 @@ export function spokenReplyText(text: string) {
+     .replace(/\s+/g, " ").trim();
+ }
+ 
+-export function useVoiceReply(comments: readonly Comment[], contextKey: string | null | undefined) {
++export function useVoiceReply(comments: readonly Comment[], contextKey: string | null | undefined, companyId?: string | null) {
+   const [enabled, setEnabled] = useState(true);
+   const [status, setStatus] = useState("");
+   const [lastText, setLastText] = useState("");
+@@ -37,53 +37,78 @@ export function useVoiceReply(comments: readonly Comment[], contextKey: string |
+   const pending = useRef(false);
+   const language = useRef("de");
+   const armed = useRef<{ seen: Set<string>; since: number } | null>(null);
+-  const speaking = useRef(false);
++  const audioContext = useRef<AudioContext | null>(null);
++  const source = useRef<AudioBufferSourceNode | null>(null);
++  const controller = useRef<AbortController | null>(null);
+   const epoch = useRef(0);
+ 
+   const stop = useCallback(() => {
+     epoch.current++;
+-    if (speaking.current && typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+-    speaking.current = false;
++    controller.current?.abort();
++    controller.current = null;
++    if (source.current) { try { source.current.stop(); } catch { /* already stopped */ } source.current = null; }
++  }, []);
++  const prepareAudio = useCallback(() => {
++    try {
++      const Ctor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
++      if (!Ctor) return null;
++      const context = audioContext.current ?? new Ctor();
++      audioContext.current = context;
++      if (context.state === "suspended") void context.resume().catch(() => {});
++      return context;
++    } catch { return null; }
+   }, []);
+   const speak = useCallback((raw: string) => {
+-    const text = spokenReplyText(raw);
+-    if (!text) return;
+-    setLastText(text);
+-    const synth = window.speechSynthesis;
+-    if (!synth || typeof SpeechSynthesisUtterance === "undefined") { setStatus("Sprachausgabe in diesem Browser nicht verfügbar."); return; }
+-    let voices: SpeechSynthesisVoice[];
+-    try { voices = synth.getVoices(); } catch { setStatus("Sprachausgabe nicht verfügbar."); return; }
+-    const local = voices.filter((voice) => voice.localService && voice.lang.toLowerCase().startsWith(language.current));
+-    if (!local.length) { setStatus("Keine lokale Stimme gefunden. Prüfe die Spracheinstellungen deines Geräts."); return; }
++    const cleaned = spokenReplyText(raw);
++    if (!cleaned) return;
++    setLastText(cleaned);
++    const context = prepareAudio();
++    if (!context || !companyId) { setStatus("Sprachausgabe nicht verfügbar. Bitte Browser-Audio prüfen."); return; }
+     stop();
+     const id = epoch.current;
+-    // Short utterances avoid browser limits while retaining the entire response.
+-    const parts = text.match(/.{1,200}(?:\s|$)|\S{1,200}/g) ?? [text];
+-    speaking.current = true;
+-    setStatus("Antwort wird vorgelesen.");
+-    try {
+-      parts.forEach((part, index) => {
+-        const utterance = new SpeechSynthesisUtterance(part.trim());
+-        utterance.voice = local.find((voice) => voice.default) ?? local[0]!;
+-        utterance.lang = utterance.voice.lang;
+-        utterance.onerror = () => { if (epoch.current === id) { stop(); setStatus("Vorlesen fehlgeschlagen. Du kannst es erneut versuchen."); } };
+-        utterance.onend = () => { if (epoch.current === id && index === parts.length - 1) { speaking.current = false; setStatus(""); } };
+-        synth.speak(utterance);
+-      });
+-    } catch { stop(); setStatus("Vorlesen fehlgeschlagen. Du kannst es erneut versuchen."); }
+-  }, [stop]);
++    const request = new AbortController();
++    controller.current = request;
++    const timeout = window.setTimeout(() => request.abort(), 95_000);
++    const text = cleaned.slice(0, 4000);
++    setStatus(cleaned.length > text.length ? "Erzeuge Sprachausgabe (auf 4000 Zeichen begrenzt)…" : "Erzeuge Sprachausgabe…");
++    void (async () => {
++      try {
++        const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/local-speech`, {
++          method: "POST", credentials: "include", cache: "no-store", signal: request.signal,
++          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, language: language.current }),
++        });
++        if (!response.ok) throw new Error("engine");
++        const bytes = await response.arrayBuffer();
++        const buffer = await context.decodeAudioData(bytes);
++        if (id !== epoch.current) return;
++        if (context.state === "suspended") await context.resume();
++        if (id !== epoch.current) return;
++        if (context.state !== "running") throw new Error("audio blocked");
++        const playback = context.createBufferSource();
++        playback.buffer = buffer;
++        playback.connect(context.destination);
++        source.current = playback;
++        playback.onended = () => { if (id === epoch.current) { source.current = null; setStatus(cleaned.length > text.length ? "Die Ausgabe wurde auf 4000 Zeichen begrenzt." : ""); } };
++        playback.start();
++        setStatus("Antwort wird vorgelesen.");
++      } catch {
++        if (id === epoch.current) setStatus("Vorlesen fehlgeschlagen. Bitte erneut vorlesen und Browser-Lautstärke prüfen.");
++      } finally { window.clearTimeout(timeout); if (controller.current === request) controller.current = null; }
++    })();
++  }, [companyId, prepareAudio, stop]);
+ 
+   const markDictated = useCallback((selectedLanguage: string) => {
+     pending.current = true;
+     language.current = selectedLanguage === "en" ? "en" : "de";
+   }, []);
+-  const beginDictation = useCallback(() => { armed.current = null; pending.current = false; stop(); setStatus(""); }, [stop]);
++  const beginDictation = useCallback(() => { armed.current = null; pending.current = false; stop(); prepareAudio(); setStatus(""); }, [stop, prepareAudio]);
+   const beforeSubmit = useCallback((body: string) => {
+     if (!enabledRef.current || (!pending.current && !body.includes(VOICE_SHORT_REQUEST))) return;
++    prepareAudio();
+     pending.current = false;
+     armed.current = { seen: new Set(commentsRef.current.map((comment) => comment.id)), since: Date.now() - 1000 };
+     setStatus("Warte auf die Agentenantwort.");
+-  }, []);
++  }, [prepareAudio]);
+   const submitFailed = useCallback(() => { armed.current = null; setStatus(""); }, []);
+   const stopPlayback = useCallback(() => { stop(); setStatus(""); }, [stop]);
+   const toggle = useCallback(() => {
+@@ -101,7 +126,7 @@ export function useVoiceReply(comments: readonly Comment[], contextKey: string |
+       new Date(comment.createdAt).getTime() >= waiting.since && comment.body?.trim());
+     if (response) { armed.current = null; speak(response.body); }
+   }, [comments, speak]);
+-  useEffect(() => () => { armed.current = null; pending.current = false; stop(); }, [contextKey, stop]);
++  useEffect(() => () => { armed.current = null; pending.current = false; stop(); const context = audioContext.current; audioContext.current = null; if (context && context.state !== "closed") void context.close().catch(() => {}); }, [contextKey, stop]);
+   const latestReply = useMemo(() => comments.filter((comment) => !comment.deletedAt && comment.authorType !== "system" &&
+     comment.presentation?.kind !== "system_notice" &&
+     (comment.authorType === "agent" || comment.authorAgentId || comment.derivedAuthorAgentId || comment.authorUserId === "board-concierge") && comment.body?.trim())
+@@ -117,8 +142,8 @@ export function VoiceReplyControl({ voice }: { voice: ReturnType<typeof useVoice
+     </button>
+     {voice.latestReply ? <button type="button" onClick={() => voice.speak(voice.latestReply)} className="hover:underline">Letzte Antwort vorlesen</button> : null}
+     {voice.status ? <span role="status">{voice.status}</span> : null}
+-    {voice.status.includes("vorgelesen") ? <button type="button" onClick={voice.stop}>Stopp</button> : null}
+-    {voice.lastText && (voice.status.includes("fehlgeschlagen") || voice.status.includes("Keine lokale Stimme")) ?
++    {voice.status.includes("vorgelesen") || voice.status.includes("Erzeuge") ? <button type="button" onClick={voice.stop}>Stopp</button> : null}
++    {voice.lastText && (voice.status.includes("fehlgeschlagen") || voice.status.includes("nicht verfügbar")) ?
+       <button type="button" onClick={() => voice.speak(voice.lastText)}>Erneut vorlesen</button> : null}
+   </span>;
+ }
+diff --git a/ui/src/pages/BoardChat.tsx b/ui/src/pages/BoardChat.tsx
+index d1cd8fbca..6996231a2 100644
+--- a/ui/src/pages/BoardChat.tsx
++++ b/ui/src/pages/BoardChat.tsx
+@@ -310,7 +310,7 @@ export function BoardChat() {
+     enabled: !!boardIssueId,
+     refetchInterval: 3000,
+   });
+-  const voiceReply = useVoiceReply(comments ?? [], selectedCompanyId);
++  const voiceReply = useVoiceReply(comments ?? [], selectedCompanyId, selectedCompanyId);
+ 
+   const sortedComments = (comments ?? [])
+     .slice()
