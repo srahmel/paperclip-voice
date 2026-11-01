@@ -1,4 +1,8 @@
-# Local dictation integration
+# Local dictation integration (legacy)
+
+> **LEGACY / OPTIONAL — DO NOT APPLY FOR THE STANDALONE VOICE PLUGIN.**
+> The recommended Paperclip Voice v0.1.1 integration needs no core changes. It uses the official plugin action bridge and the Voicebox service in `voicebox/`. This directory preserves historical native patches for custom deployments only. Patches are tied to specific upstream commits and must never be applied blindly.
+>
 
 This directory contains a separate, manual dictation integration with local reply playback. It does not activate the repository's experimental voice-dialog plugin, submit messages, or change persistent agent instructions. `paperclip-core.patch` was produced against Paperclip commit `4942502c4`; apply `paperclip-voice-replies.patch` and then `paperclip-piper-replies.patch`. These require review and revalidation on other versions. The Paperclip plugin API in that version does not expose an editable composer slot.
 
