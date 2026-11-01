@@ -107,7 +107,7 @@ const plugin = definePlugin({
       if (!issue) throw new Error('Issue not found');
       const comments = await ctx.issues.listComments(issueId, companyId);
       const selected = comments.find((comment) => comment.id === commentId);
-      if (!isAgentComment(selected)) throw new Error('Comment is not an agent response');
+      if (!selected || !isAgentComment(selected)) throw new Error('Comment is not an agent response');
       const { text, truncated } = spokenComment(selected.body, config.maxSpokenChars);
       if (!text) return startJob(companyId, ownerId, async () => ({ audioBase64: '', mime: 'audio/wav', bytes: 0, truncated }));
       const language = allowedLanguage(params.language, config.language);
