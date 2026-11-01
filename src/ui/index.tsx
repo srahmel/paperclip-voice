@@ -23,8 +23,8 @@ function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function api<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown): Promise<T> {
-  return paperclipApi(path, { method, body }) as Promise<T>;
+async function api<T>(path: string): Promise<T> {
+  return paperclipApi(path) as Promise<T>;
 }
 
 async function apiComments(issueId: string): Promise<Comment[]> {
@@ -136,7 +136,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   useEffect(() => {
     if (!opened || !companyId) return;
-    const inferred = routeTarget(window.location.pathname);
+    const inferred = routeTarget(window.location.pathname) as Target | null;
     if (phaseRef.current === 'off' && inferred) setTarget(inferred);
     void api<Agent[]>(`/companies/${encodeURIComponent(companyId)}/agents`)
       .then((items) => setAgents(items.filter((agent) => agent.status !== 'terminated')))
