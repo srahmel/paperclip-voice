@@ -1,0 +1,532 @@
+diff --git a/server/src/__tests__/local-dictation.test.ts b/server/src/__tests__/local-dictation.test.ts
+new file mode 100644
+index 000000000..8c24d498d
+--- /dev/null
++++ b/server/src/__tests__/local-dictation.test.ts
+@@ -0,0 +1,90 @@
++import express from "express";
++import request from "supertest";
++import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
++import { localDictationRoutes } from "../routes/local-dictation.js";
++import { boardMutationGuard } from "../middleware/board-mutation-guard.js";
++
++const company = "company-1";
++let directory: string;
++const oldEnv = { ...process.env };
++beforeAll(() => {
++  directory = mkdtempSync(join(tmpdir(), "paperclip-dictation-test-"));
++  const fixture = join(directory, "worker.cjs");
++  writeFileSync(fixture, `process.stdin.resume(); process.stdin.on('end', () => { console.log(JSON.stringify({ text: 'hello' })); });`);
++  writeFileSync(join(directory, "slow.cjs"), `process.stdin.resume(); process.stdin.on('end', () => { setTimeout(() => console.log(JSON.stringify({ text: 'hello' })), 700); });`);
++  process.env.PAPERCLIP_VOICE_PYTHON = process.execPath;
++  process.env.PAPERCLIP_VOICE_WORKER = fixture;
++  process.env.PAPERCLIP_VOICE_MODEL = directory;
++});
++afterAll(() => { rmSync(directory, { recursive: true, force: true }); });
++afterEach(() => { for (const k of ["PAPERCLIP_VOICE_PYTHON", "PAPERCLIP_VOICE_WORKER", "PAPERCLIP_VOICE_MODEL"]) { if (oldEnv[k] === undefined) delete process.env[k]; else process.env[k] = oldEnv[k]; } });
++
++function app(actor: Record<string, unknown>) {
++  const server = express();
++  server.use((req, _res, next) => { Object.assign(req, { actor }); next(); });
++  server.use(boardMutationGuard());
++  server.use(localDictationRoutes());
++  server.use((err: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(err.status ?? 500).json({ error: "denied" }));
++  return server;
++}
++const session = { type: "board", source: "session", userId: "u1", companyIds: [company] };
++function send(server: express.Express, bytes: Buffer = Buffer.from("audio")) {
++  return request(server).post(`/companies/${company}/local-dictation`).set("Origin", "http://localhost:3100").set("Content-Type", "audio/webm").send(bytes);
++}
++describe("local dictation endpoint", () => {
++  it("rejects unauthenticated, agent and cross-company requests before accepting audio", async () => {
++    expect((await send(app({ type: "none" }))).status).toBe(401);
++    expect((await send(app({ type: "agent", companyId: company }))).status).toBe(403);
++    expect((await send(app({ ...session, companyIds: ["other"] }))).status).toBe(403);
++  });
++  it("requires a trusted origin and rejects board API keys", async () => {
++    expect((await request(app(session)).post(`/companies/${company}/local-dictation`).set("Origin", "https://evil.example").set("Content-Type", "audio/webm").send("x")).status).toBe(403);
++    expect((await send(app({ ...session, source: "board_key" }))).status).toBe(403);
++  });
++  it("limits uploads and rejects invalid audio types", async () => {
++    expect((await request(app(session)).post(`/companies/${company}/local-dictation`).set("Origin", "http://localhost:3100").set("Content-Type", "text/plain").send("x")).status).toBe(415);
++    expect((await send(app(session), Buffer.alloc(5 * 1024 * 1024 + 1))).status).toBe(413);
++  });
++  it("passes bounded bytes to the worker and returns only its transcript", async () => {
++    process.env.PAPERCLIP_VOICE_PYTHON = process.execPath;
++    process.env.PAPERCLIP_VOICE_WORKER = join(directory, "worker.cjs");
++    process.env.PAPERCLIP_VOICE_MODEL = directory;
++    const res = await send(app(session));
++    expect(res.status).toBe(200);
++    expect(res.body).toEqual({ text: "hello" });
++    expect(res.headers["cache-control"]).toBe("no-store");
++  });
++  it("reports an unavailable worker without exposing a process error", async () => {
++    process.env.PAPERCLIP_VOICE_PYTHON = join(directory, "missing.exe");
++    process.env.PAPERCLIP_VOICE_WORKER = join(directory, "worker.cjs");
++    process.env.PAPERCLIP_VOICE_MODEL = directory;
++    const res = await send(app(session));
++    expect(res.status).toBe(503);
++    expect(JSON.stringify(res.body)).not.toContain(directory);
++  });
++  it("rejects parallel uploads while a transcription is running", async () => {
++    process.env.PAPERCLIP_VOICE_PYTHON = process.execPath;
++    process.env.PAPERCLIP_VOICE_WORKER = join(directory, "slow.cjs");
++    process.env.PAPERCLIP_VOICE_MODEL = directory;
++    const server = app(session);
++    const first = send(server).then((result) => result);
++    await new Promise((resolve) => setTimeout(resolve, 250));
++    expect((await send(server)).status).toBe(429);
++    expect((await first).status).toBe(200);
++  });
++  it.skipIf(!process.env.PAPERCLIP_TEST_VOICE_AUDIO)("transcribes a generated speech fixture through the real CPU worker", async () => {
++    process.env.PAPERCLIP_VOICE_PYTHON = process.env.PAPERCLIP_TEST_VOICE_PYTHON;
++    process.env.PAPERCLIP_VOICE_WORKER = process.env.PAPERCLIP_TEST_VOICE_WORKER;
++    process.env.PAPERCLIP_VOICE_MODEL = process.env.PAPERCLIP_TEST_VOICE_MODEL;
++    const response = await request(app(session)).post(`/companies/${company}/local-dictation`)
++      .set("Origin", "http://localhost:3100").set("Content-Type", "audio/wav")
++      .set("X-Dictation-Language", process.env.PAPERCLIP_TEST_VOICE_LANGUAGE ?? "auto")
++      .send(readFileSync(process.env.PAPERCLIP_TEST_VOICE_AUDIO!));
++    expect(response.status).toBe(200);
++    expect(typeof response.body.text).toBe("string");
++    expect(response.body.text.trim().length).toBeGreaterThan(0);
++  }, 180_000);
++});
+diff --git a/server/src/app.ts b/server/src/app.ts
+index c16625b8f..45063aedb 100644
+--- a/server/src/app.ts
++++ b/server/src/app.ts
+@@ -1,4 +1,5 @@
+ import { promptInjectionPreventionRoutes } from "./routes/prompt-injection-prevention.js";
++import { localDictationRoutes } from "./routes/local-dictation.js";
+ import { voiceSessionRoutes, voiceWebhookRoutes } from "./routes/voice-sessions.js";
+ import { eq } from "drizzle-orm";
+ import { chatEndpoints } from "@paperclipai/db";
+@@ -751,6 +752,7 @@ export async function createApp(
+   const agentAvatars = agentAvatarRoutes();
+   api.use(agentAvatars.router);
+   api.use(boardMutationGuard());
++  api.use(localDictationRoutes());
+   api.use("/health", health);
+   api.use(openApiRoutes());
+   api.use("/cloud", cloudRoutes());
+diff --git a/server/src/routes/local-dictation.ts b/server/src/routes/local-dictation.ts
+new file mode 100644
+index 000000000..8982f6c27
+--- /dev/null
++++ b/server/src/routes/local-dictation.ts
+@@ -0,0 +1,95 @@
++import express, { Router } from "express";
++import { spawn } from "node:child_process";
++import { assertAuthenticated, assertBoard, assertCompanyAccess } from "./authz.js";
++
++const MAX_BYTES = 5 * 1024 * 1024;
++let active: symbol | null = null;
++function release(token: symbol) { if (active === token) active = null; }
++
++/** Audio and output stay in memory. The worker has no network listener. */
++export function localDictationRoutes() {
++  const router = Router();
++  router.post("/companies/:companyId/local-dictation", (req, res, next) => {
++    assertAuthenticated(req);
++    assertBoard(req);
++    assertCompanyAccess(req, req.params.companyId as string);
++    if (req.actor.source !== "session") {
++      res.status(403).json({ error: "A signed-in browser session is required" });
++      return;
++    }
++    res.setHeader("Cache-Control", "no-store");
++    if (!/^audio\/(webm|ogg|mp4|wav|x-wav)(?:;|$)/i.test(req.headers["content-type"] ?? "")) {
++      res.status(415).json({ error: "Unsupported audio format" });
++      return;
++    }
++    if (active) {
++      res.status(429).json({ error: "Local transcription is busy" });
++      return;
++    }
++    const token = Symbol("dictation");
++    active = token;
++    res.locals.dictationToken = token;
++    res.on("close", () => { if (!res.locals.dictationWorkerStarted) release(token); });
++    next();
++  }, express.raw({ type: () => true, limit: MAX_BYTES, inflate: false }), (req, res) => {
++    const language = req.header("X-Dictation-Language") ?? "auto";
++    if (!["auto", "de", "en"].includes(language) || !Buffer.isBuffer(req.body) || !req.body.length) {
++      res.status(400).json({ error: "Invalid audio or language" });
++      return;
++    }
++    const python = process.env.PAPERCLIP_VOICE_PYTHON;
++    const worker = process.env.PAPERCLIP_VOICE_WORKER;
++    if (!python || !worker || !process.env.PAPERCLIP_VOICE_MODEL) {
++      res.status(503).json({ error: "Local transcription is unavailable" });
++      return;
++    }
++    res.locals.dictationWorkerStarted = true;
++    let output = "";
++    let finished = false;
++    const mediaType = (req.headers["content-type"] ?? "").split(";", 1)[0]!.toLowerCase();
++    const format = ({ "audio/webm": "matroska", "audio/ogg": "ogg", "audio/mp4": "mov", "audio/wav": "wav", "audio/x-wav": "wav" } as Record<string, string>)[mediaType]!;
++    const child = spawn(python, [worker, language, format], {
++      windowsHide: true,
++      stdio: ["pipe", "pipe", "ignore"],
++      // Do not pass Paperclip's authentication secrets or agent credentials.
++      env: {
++        SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
++        PATH: process.env.PATH, TEMP: process.env.TEMP, TMP: process.env.TMP,
++        PAPERCLIP_VOICE_MODEL: process.env.PAPERCLIP_VOICE_MODEL,
++        PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", HF_HUB_OFFLINE: "1",
++        OMP_NUM_THREADS: "4", OPENBLAS_NUM_THREADS: "1",
++      },
++    });
++    const timer = setTimeout(() => { child.kill(); }, 180_000);
++    const finish = (status: number, body: { text?: string; error?: string }) => {
++      if (finished) return;
++      finished = true;
++      clearTimeout(timer);
++      release(res.locals.dictationToken as symbol);
++      if (!res.destroyed && !res.headersSent) res.status(status).json(body);
++    };
++    res.on("close", () => { if (!res.writableFinished) child.kill(); });
++    child.stdout.on("data", (chunk: Buffer) => {
++      output += chunk.toString("utf8");
++      if (output.length > 100_000) child.kill();
++    });
++    child.on("error", () => finish(503, { error: "Local transcription is unavailable" }));
++    child.stdin.on("error", () => {});
++    child.on("close", (code) => {
++      if (code !== 0) return finish(503, { error: "Transcription failed or timed out" });
++      try {
++        const result = JSON.parse(output) as { text?: unknown };
++        if (typeof result.text !== "string" || result.text.length > 50_000) throw new Error();
++        finish(200, { text: result.text });
++      } catch { finish(503, { error: "Transcription failed" }); }
++    });
++    child.stdin.end(req.body);
++  });
++  router.use((err: { status?: number }, _req: express.Request, res: express.Response, next: express.NextFunction) => {
++    if (!res.locals.dictationToken) return next(err);
++    if (!res.locals.dictationWorkerStarted) release(res.locals.dictationToken as symbol);
++    if (res.headersSent) return next(err);
++    res.status(err.status === 413 ? 413 : 400).json({ error: "Invalid or oversized audio" });
++  });
++  return router;
++}
+diff --git a/ui/src/components/ChatComposer.tsx b/ui/src/components/ChatComposer.tsx
+index 1834c88f5..d7b80323a 100644
+--- a/ui/src/components/ChatComposer.tsx
++++ b/ui/src/components/ChatComposer.tsx
+@@ -11,6 +11,7 @@ import {
+ } from "react";
+ import { AlertTriangle, Check, Loader2, Paperclip, Send } from "lucide-react";
+ import { cn } from "../lib/utils";
++import { LocalDictation, appendDictation } from "./LocalDictation";
+ 
+ /**
+  * Shared chat composer (PAP-95a / PAP-96).
+@@ -43,6 +44,7 @@ export interface ChatComposerHandle {
+ }
+ 
+ export interface ChatComposerProps {
++  companyId?: string | null;
+   value: string;
+   onChange: (value: string) => void;
+   onSubmit: () => void;
+@@ -110,6 +112,7 @@ function dragHasFiles(evt: ReactDragEvent<HTMLDivElement>): boolean {
+ 
+ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
+   {
++    companyId,
+     value,
+     onChange,
+     onSubmit,
+@@ -136,6 +139,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
+   forwardedRef,
+ ) {
+   const textareaRef = useRef<HTMLTextAreaElement>(null);
++  const valueRef = useRef(value);
++  valueRef.current = value;
+   const fileInputRef = useRef<HTMLInputElement>(null);
+   const dragDepthRef = useRef(0);
+   const [isDragOver, setIsDragOver] = useState(false);
+@@ -329,6 +334,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
+       ) : null}
+ 
+       <div className="mt-2 flex items-center gap-2">
++        {companyId ? <LocalDictation key={companyId} companyId={companyId} disabled={disabled} onText={(text) => onChange(appendDictation(valueRef.current, text))} /> : null}
+         {canAttach ? (
+           <>
+             <input
+diff --git a/ui/src/components/IssueChatThread.tsx b/ui/src/components/IssueChatThread.tsx
+index a2000c86a..127683ca3 100644
+--- a/ui/src/components/IssueChatThread.tsx
++++ b/ui/src/components/IssueChatThread.tsx
+@@ -264,6 +264,7 @@ import {
+ import { SourceTrustBadge } from "./SourceTrustBadge";
+ import { CommentAttributionChip } from "./CommentAttributionChip";
+ import { resolveCommentAttribution } from "../lib/comment-attribution";
++import { LocalDictation, appendDictation } from "./LocalDictation";
+ 
+ interface IssueChatMessageContext {
+   feedbackDataSharingPreference: FeedbackDataSharingPreference;
+@@ -5600,6 +5601,7 @@ const IssueChatComposer = forwardRef<
+ 
+       <div className="flex flex-wrap items-center justify-end gap-3">
+         <div className="mr-auto flex items-center gap-2">
++          <LocalDictation key={`${companyId}:${draftKey}`} companyId={companyId} disabled={!!uncertainSubmission} onText={(text) => changeBody((current) => appendDictation(current, text))} />
+           {canAcceptFiles ? (
+             <input ref={attachInputRef} type="file" className="hidden" onChange={handleAttachFile} />
+           ) : null}
+diff --git a/ui/src/components/LocalDictation.test.tsx b/ui/src/components/LocalDictation.test.tsx
+new file mode 100644
+index 000000000..1cd5360fb
+--- /dev/null
++++ b/ui/src/components/LocalDictation.test.tsx
+@@ -0,0 +1,83 @@
++// @vitest-environment jsdom
++import { act, useState } from "react";
++import { createRoot } from "react-dom/client";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { LocalDictation, appendDictation } from "./LocalDictation";
++
++(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
++afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
++
++describe("local dictation", () => {
++  it("appends without overwriting or duplicating whitespace", () => {
++    expect(appendDictation("draft", "  text  ")).toBe("draft text");
++    expect(appendDictation("draft\n", "text")).toBe("draft\ntext");
++    expect(appendDictation("draft", " ")).toBe("draft");
++  });
++  it("prevents duplicate starts and releases a late microphone grant after cancellation", async () => {
++    let grant!: (stream: MediaStream) => void;
++    const stop = vi.fn();
++    const getUserMedia = vi.fn(() => new Promise<MediaStream>((resolve) => { grant = resolve; }));
++    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
++    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
++    vi.stubGlobal("MediaRecorder", class {});
++    const container = document.createElement("div");
++    const root = createRoot(container);
++    await act(async () => { root.render(<LocalDictation companyId="company" onText={vi.fn()} />); });
++    const start = container.querySelector<HTMLButtonElement>('button[aria-label="Spracheingabe starten"]')!;
++    await act(async () => { start.click(); start.click(); });
++    expect(getUserMedia).toHaveBeenCalledTimes(1);
++    expect(container.textContent).toContain("Mikrofon öffnen");
++    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Spracheingabe abbrechen"]')!.click(); });
++    await act(async () => { grant({ getTracks: () => [{ stop }] } as unknown as MediaStream); await Promise.resolve(); });
++    expect(stop).toHaveBeenCalledTimes(1);
++    expect(container.querySelector('button[aria-label="Spracheingabe starten"]')).toBeTruthy();
++    await act(async () => root.unmount());
++  });
++  it("shows microphone permission errors without changing the draft", async () => {
++    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
++    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError")) } });
++    vi.stubGlobal("MediaRecorder", class {});
++    const onText = vi.fn();
++    const container = document.createElement("div");
++    const root = createRoot(container);
++    await act(async () => { root.render(<LocalDictation companyId="company" onText={onText} />); });
++    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Spracheingabe starten"]')!.click(); });
++    expect(container.querySelector('[role="alert"]')?.textContent).toContain("verweigert");
++    expect(onText).not.toHaveBeenCalled();
++    await act(async () => root.unmount());
++  });
++  it("records once, releases the microphone and appends the editable transcript without sending", async () => {
++    const stopTrack = vi.fn();
++    Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
++    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }) } });
++    class FakeRecorder {
++      static isTypeSupported = () => true;
++      state = "inactive";
++      mimeType = "audio/webm";
++      ondataavailable: ((event: { data: Blob }) => void) | null = null;
++      onstop: (() => void) | null = null;
++      onerror: (() => void) | null = null;
++      start() { this.state = "recording"; }
++      stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["audio"], { type: this.mimeType }) }); this.onstop?.(); }
++    }
++    vi.stubGlobal("MediaRecorder", FakeRecorder);
++    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: "recognized words" }) });
++    vi.stubGlobal("fetch", fetchMock);
++    const submit = vi.fn();
++    function Harness() {
++      const [draft, setDraft] = useState("existing draft");
++      return <><textarea value={draft} onChange={(e) => setDraft(e.target.value)} /><LocalDictation companyId="company" onText={(text) => setDraft((current) => appendDictation(current, text))} /><button onClick={submit}>Send</button></>;
++    }
++    const container = document.createElement("div");
++    const root = createRoot(container);
++    await act(async () => { root.render(<Harness />); });
++    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Spracheingabe starten"]')!.click(); });
++    expect(container.textContent).toContain("Aufnahme läuft");
++    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Aufnahme beenden"]')!.click(); });
++    expect(fetchMock).toHaveBeenCalledTimes(1);
++    expect(stopTrack).toHaveBeenCalledTimes(1);
++    expect(container.querySelector("textarea")!.value).toBe("existing draft recognized words");
++    expect(submit).not.toHaveBeenCalled();
++    await act(async () => root.unmount());
++  });
++});
+diff --git a/ui/src/components/LocalDictation.tsx b/ui/src/components/LocalDictation.tsx
+new file mode 100644
+index 000000000..f4c0a4434
+--- /dev/null
++++ b/ui/src/components/LocalDictation.tsx
+@@ -0,0 +1,125 @@
++import { useEffect, useRef, useState } from "react";
++import { Loader2, Mic, Square, X } from "lucide-react";
++
++type Phase = "idle" | "starting" | "recording" | "processing";
++const MAX_BYTES = 5 * 1024 * 1024;
++
++export function appendDictation(draft: string, text: string) {
++  const clean = text.trim();
++  if (!clean) return draft;
++  return draft + (draft && !/\s$/.test(draft) ? " " : "") + clean;
++}
++
++export function LocalDictation({ companyId, disabled, onText }: {
++  companyId?: string | null; disabled?: boolean; onText: (text: string) => void;
++}) {
++  const [phase, setPhase] = useState<Phase>("idle");
++  const [error, setError] = useState("");
++  const [language, setLanguage] = useState("auto");
++  const phaseRef = useRef<Phase>("idle");
++  const epoch = useRef(0);
++  const stream = useRef<MediaStream | null>(null);
++  const recorder = useRef<MediaRecorder | null>(null);
++  const abort = useRef<AbortController | null>(null);
++  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const onTextRef = useRef(onText);
++  onTextRef.current = onText;
++
++  function transition(next: Phase) { phaseRef.current = next; setPhase(next); }
++  function release() {
++    if (timer.current) clearTimeout(timer.current);
++    timer.current = null;
++    stream.current?.getTracks().forEach((track) => track.stop());
++    stream.current = null;
++  }
++  function cancel() {
++    epoch.current++;
++    abort.current?.abort();
++    abort.current = null;
++    if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
++    recorder.current = null;
++    release();
++    transition("idle");
++    setError("");
++  }
++  useEffect(() => () => {
++    epoch.current++;
++    abort.current?.abort();
++    if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
++    release();
++  }, []);
++  useEffect(() => { if (disabled) cancel(); }, [disabled]);
++
++  async function toggle() {
++    if (phaseRef.current === "recording") {
++      transition("processing");
++      if (recorder.current?.state === "recording") recorder.current.stop();
++      return;
++    }
++    if (phaseRef.current !== "idle" || !companyId || disabled) return;
++    setError("");
++    transition("starting");
++    const id = ++epoch.current;
++    try {
++      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
++        throw new Error("Mikrofonzugriff benötigt HTTPS oder localhost und einen unterstützten Browser.");
++      }
++      const acquired = await navigator.mediaDevices.getUserMedia({ audio: true });
++      if (id !== epoch.current) { acquired.getTracks().forEach((track) => track.stop()); return; }
++      stream.current = acquired;
++      const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"]
++        .find((value) => MediaRecorder.isTypeSupported(value));
++      const capture = mime ? new MediaRecorder(acquired, { mimeType: mime }) : new MediaRecorder(acquired);
++      recorder.current = capture;
++      const chunks: Blob[] = [];
++      let bytes = 0;
++      capture.ondataavailable = (event) => {
++        if (event.data.size) { bytes += event.data.size; chunks.push(event.data); }
++        if (bytes > MAX_BYTES && capture.state !== "inactive") capture.stop();
++      };
++      capture.onerror = () => { if (id === epoch.current) { cancel(); setError("Aufnahme fehlgeschlagen."); } };
++      capture.onstop = async () => {
++        release();
++        recorder.current = null;
++        if (id !== epoch.current) return;
++        if (!bytes || bytes > MAX_BYTES) { transition("idle"); setError("Aufnahme leer oder zu groß."); return; }
++        transition("processing");
++        const controller = new AbortController();
++        abort.current = controller;
++        const timeout = setTimeout(() => controller.abort(), 185_000);
++        try {
++          const blob = new Blob(chunks, { type: capture.mimeType || "audio/webm" });
++          const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}/local-dictation`, {
++            method: "POST", credentials: "include", cache: "no-store", signal: controller.signal,
++            headers: { "Content-Type": blob.type, "X-Dictation-Language": language }, body: blob,
++          });
++          if (!response.ok) throw new Error("Transkription nicht verfügbar. Bitte erneut versuchen.");
++          const result = await response.json() as { text?: unknown };
++          if (id !== epoch.current) return;
++          if (typeof result.text !== "string" || !result.text.trim()) throw new Error("Keine Sprache erkannt.");
++          onTextRef.current(result.text);
++          transition("idle");
++        } catch (e) {
++          if (id === epoch.current) { transition("idle"); setError(e instanceof Error && e.name !== "AbortError" ? e.message : "Transkription abgebrochen oder Zeitlimit erreicht."); }
++        } finally { clearTimeout(timeout); if (abort.current === controller) abort.current = null; }
++      };
++      capture.start(1000);
++      transition("recording");
++      timer.current = setTimeout(() => { if (capture.state === "recording") capture.stop(); }, 85_000);
++    } catch (e) {
++      release();
++      if (id === epoch.current) { transition("idle"); setError(e instanceof DOMException && e.name === "NotAllowedError" ? "Mikrofonzugriff verweigert." : e instanceof Error ? e.message : "Mikrofon nicht verfügbar."); }
++    }
++  }
++  const active = phase !== "idle";
++  return <span className="inline-flex flex-wrap items-center gap-1 text-xs" data-testid="local-dictation">
++    <button type="button" onClick={() => void toggle()} disabled={disabled || !companyId || phase === "starting" || phase === "processing"}
++      aria-label={phase === "recording" ? "Aufnahme beenden" : "Spracheingabe starten"} title={phase === "recording" ? "Aufnahme beenden" : "Spracheingabe starten"}
++      className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-accent disabled:opacity-50">
++      {phase === "recording" ? <Square className="size-4 text-red-600" /> : phase === "processing" || phase === "starting" ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
++    </button>
++    {active ? <><span role="status">{phase === "starting" ? "Mikrofon öffnen…" : phase === "recording" ? "Aufnahme läuft" : "Transkribiere…"}</span><button type="button" onClick={cancel} aria-label="Spracheingabe abbrechen" className="p-1"><X className="size-4" /></button></> :
++      <select aria-label="Sprache der Aufnahme" value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-transparent text-muted-foreground"><option value="auto">Auto</option><option value="de">DE</option><option value="en">EN</option></select>}
++    {error ? <span role="alert" className="text-destructive">{error}</span> : null}
++  </span>;
++}
+diff --git a/ui/src/components/task-chat/TaskChatComposer.tsx b/ui/src/components/task-chat/TaskChatComposer.tsx
+index 8d162be06..fd5159b89 100644
+--- a/ui/src/components/task-chat/TaskChatComposer.tsx
++++ b/ui/src/components/task-chat/TaskChatComposer.tsx
+@@ -65,6 +65,7 @@ import { TaskChatPausedTakeover, type TaskComposerPause } from "./TaskChatPaused
+ import { ComposerRunSettingsPicker } from "./ComposerRunSettingsPicker";
+ import { TaskChatComposerBar } from "./TaskChatComposerBar";
+ import { ComposerAddMenu, ComposerModeChip, ComposerPrivacyChip } from "./ComposerAddMenu";
++import { LocalDictation, appendDictation } from "@/components/LocalDictation";
+ import type { ComposerRunSettings } from "./composer-run-settings";
+ import type { Agent, IssueAssigneeAdapterOverrides } from "@paperclipai/shared";
+ 
+@@ -1459,6 +1460,7 @@ export function TaskChatComposer({
+             data-testid="task-chat-composer-actions"
+           >
+             <div className="flex min-w-0 max-w-full items-center gap-2">
++            <LocalDictation key={`${companyId}:${draftKey}:${queuedEdit?.commentId ?? ""}`} companyId={companyId} disabled={disabled || !!uncertainSubmission || !!queuedEdit} onText={(text) => changeBody(appendDictation(bodyRef.current, text))} />
+             {canAcceptFiles ? (
+               <input ref={fileInputRef} type="file" className="hidden" multiple={Boolean(creation)} onChange={handleFileInputChange} />
+             ) : null}
+diff --git a/ui/src/pages/BoardChat.tsx b/ui/src/pages/BoardChat.tsx
+index 3901c926e..b5c803967 100644
+--- a/ui/src/pages/BoardChat.tsx
++++ b/ui/src/pages/BoardChat.tsx
+@@ -950,6 +950,7 @@ export function BoardChat() {
+                the fade so the scrollbar stays usable; the composer re-enables them. */}
+           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-background/0 px-6 pt-6 pb-5">
+             <ChatComposer
++              companyId={selectedCompanyId}
+               ref={composerRef}
+               value={input}
+               onChange={setInput}
