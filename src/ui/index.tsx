@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
 import { routeTarget, vadDecision, voiceMessage, cleanSpokenText } from '../lib/voice-utils.mjs';
 import { transcribeLocal, speakLocal } from '../lib/local-audio.mjs';
-import { paperclipApi, ensureNativeAgentChat, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
+import { paperclipApi, ensureNativeAgentChat, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
 type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
@@ -31,7 +31,7 @@ async function apiComments(issueId: string): Promise<Comment[]> {
 }
 
 async function resolveIssue(companyId: string, target: Target): Promise<string> {
-  if (target.kind === 'issue') return target.ref;
+  if (target.kind === 'issue') return resolveNativeTask(companyId, target.ref);
   return ensureNativeAgentChat(companyId, target.ref);
 }
 
@@ -45,6 +45,18 @@ function isAgentReply(comment: Comment): boolean {
   return Boolean((comment.authorAgentId || comment.authorType === 'agent') && !comment.deletedAt && comment.body?.trim());
 }
 
+export function TaskVoiceButton({ context }: PluginWidgetProps) {
+  if (!context.companyId || !context.entityId) return null;
+  return <button type="button" title="Sprachmodus für diesen Task öffnen" onClick={() => {
+    window.dispatchEvent(new CustomEvent('paperclip-voice-open-task', { detail: { companyId: context.companyId, issueId: context.entityId } }));
+  }} style={{ ...P.button, margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
+    </svg>
+    Sprachmodus für diesen Task
+  </button>;
+}
+
 export function VoiceOverlay({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? '';
   const [opened, setOpened] = useState(false);
@@ -53,6 +65,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [target, setTargetState] = useState<Target | null>(null);
   const targetRef = useRef<Target | null>(null);
+  const explicitTarget = useRef(false);
   const [issueId, setIssueId] = useState<string | null>(null);
   const [lastTranscript, setLastTranscript] = useState('');
   const [lastReply, setLastReply] = useState('');
@@ -114,9 +127,29 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   useEffect(() => { teardown(); setIssueId(null); setTarget(null); }, [companyId, teardown]);
 
   useEffect(() => {
+    const openTask = (event: Event) => {
+      const detail = (event as CustomEvent<{ companyId?: string; issueId?: string }>).detail;
+      if (!detail || detail.companyId !== companyId || !detail.issueId) return;
+      setOpened(true);
+      if (phaseRef.current !== 'off' && phaseRef.current !== 'error') {
+        setError('Bitte den laufenden Sprachmodus stoppen, bevor du den Task wechselst.');
+        return;
+      }
+      explicitTarget.current = !opened;
+      setTarget({ kind: 'issue', ref: detail.issueId });
+      setError(null);
+    };
+    window.addEventListener('paperclip-voice-open-task', openTask);
+    return () => window.removeEventListener('paperclip-voice-open-task', openTask);
+  }, [companyId, opened]);
+
+  useEffect(() => {
     if (!opened || !companyId) return;
     const inferred = routeTarget(window.location.pathname) as Target | null;
-    if (phaseRef.current === 'off' && inferred) setTarget(inferred);
+    if (phaseRef.current === 'off' || phaseRef.current === 'error') {
+      if (explicitTarget.current) explicitTarget.current = false;
+      else setTarget(inferred);
+    }
     void api<Agent[]>(`/companies/${encodeURIComponent(companyId)}/agents`)
       .then((items) => setAgents(items.filter((agent) => agent.status !== 'terminated')))
       .catch((cause) => setError(`Agenten konnten nicht geladen werden: ${friendlyError(cause)}`));
@@ -331,7 +364,13 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       const ctx = new AudioContext();
       audioContextRef.current = ctx;
-      await ctx.resume(); // unlock on the original user gesture before requesting microphone
+      await ctx.resume(); // unlock during the initial user gesture
+      if (targetRef.current?.kind === 'chat') {
+        const settings = await api<{ enableAgentChat?: boolean }>('/instance/settings/experimental');
+        if (epoch !== epochRef.current) return;
+        if (!settings.enableAgentChat) throw new Error('Agenten-Chats sind in Paperclip deaktiviert. Öffne einen Task und wähle dort „Sprachmodus für diesen Task“.');
+      }
+      if (epoch !== epochRef.current) return;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (epoch !== epochRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
@@ -343,7 +382,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     } catch (cause) {
       if (epoch !== epochRef.current) return;
       teardown();
-      setError(`Mikrofon konnte nicht gestartet werden: ${friendlyError(cause)}`);
+      setError(`Sprachmodus konnte nicht gestartet werden: ${friendlyError(cause)}`);
       setPhase('error');
     }
   }

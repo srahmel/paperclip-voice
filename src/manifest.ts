@@ -13,6 +13,7 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       { type: 'appShellOverlay', id: 'voice-global', displayName: 'Voice mode', exportName: 'VoiceOverlay' },
+      { type: 'toolbarButton', id: 'voice-task', displayName: 'Sprachmodus', exportName: 'TaskVoiceButton', entityTypes: ['issue'] },
     ],
   },
 };

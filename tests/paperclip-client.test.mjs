@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureNativeAgentChat, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+import { ensureNativeAgentChat, resolveNativeTask, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+
+test('task references resolve to the correct accessible company issue', async () => {
+  let calls = 0;
+  const doFetch = async (url, options) => {
+    calls++;
+    assert.equal(url, '/api/issues/HUM-21');
+    assert.equal(options.method, 'GET');
+    return { ok: true, json: async () => ({ id: 'issue-uuid', companyId: 'company' }) };
+  };
+  assert.equal(await resolveNativeTask('company', 'HUM-21', doFetch), 'issue-uuid');
+  await assert.rejects(resolveNativeTask('other-company', 'HUM-21', doFetch), /anderen Organisation/);
+  assert.equal(calls, 2);
+});
 
 test('voice mode resolves official agent chat as existing durable issue', async () => {
   const calls = [];

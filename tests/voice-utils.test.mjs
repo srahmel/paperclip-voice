@@ -51,6 +51,7 @@ test('voice request adds a temporary visible hint only for voice turns', () => {
 });
 
 test('route target resolves native agent chat and issue destinations', () => {
+  assert.deepEqual(routeTarget('/HUM/issues/HUM-21'), { kind: 'issue', ref: 'HUM-21' });
   assert.deepEqual(routeTarget('/chats/alex'), { kind: 'chat', ref: 'alex' });
   assert.deepEqual(routeTarget('/companies/demo/chats/alex%20test'), { kind: 'chat', ref: 'alex test' });
   const id = '2ab1581c-f210-41e8-86f0-a8d271b8d012';

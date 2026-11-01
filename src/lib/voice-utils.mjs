@@ -86,7 +86,7 @@ export function voiceMessage(text, concise = true) {
 /** Derive current Paperclip destination without mutating the host route. */
 export function routeTarget(pathname) {
   const path = String(pathname ?? '').split('?')[0].split('#')[0];
-  const issue = path.match(/\/issues\/([0-9a-f-]{36})(?:\/|$)/i);
+  const issue = path.match(/\/issues\/([a-z0-9][a-z0-9-]{0,127})(?:\/|$)/i);
   if (issue) return { kind: 'issue', ref: issue[1] };
   const chat = path.match(/\/chats\/([^/]+)(?:\/|$)/i);
   if (chat && chat[1]) {

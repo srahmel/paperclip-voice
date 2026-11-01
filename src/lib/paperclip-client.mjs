@@ -32,6 +32,13 @@ export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch
   return issue.id;
 }
 
+export async function resolveNativeTask(companyId, reference, doFetch = fetch) {
+  if (!companyId || !reference) throw new Error('Task fehlt.');
+  const issue = await paperclipApi(`/issues/${encodeURIComponent(reference)}`, { doFetch });
+  if (!issue?.id || issue.companyId !== companyId) throw new Error('Task ist nicht zugänglich oder gehört zu einer anderen Organisation.');
+  return issue.id;
+}
+
 export async function readNativeComments(issueId, doFetch = fetch) {
   if (!issueId) throw new Error('Issue ID is required');
   const comments = await paperclipApi(`/issues/${encodeURIComponent(issueId)}/comments?order=desc&limit=100`, { doFetch });
