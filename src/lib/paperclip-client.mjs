@@ -32,9 +32,11 @@ export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch
   return issue.id;
 }
 
-export function readNativeComments(issueId, doFetch = fetch) {
+export async function readNativeComments(issueId, doFetch = fetch) {
   if (!issueId) throw new Error('Issue ID is required');
-  return paperclipApi(`/issues/${encodeURIComponent(issueId)}/comments?order=asc&limit=100`, { doFetch });
+  const comments = await paperclipApi(`/issues/${encodeURIComponent(issueId)}/comments?order=desc&limit=100`, { doFetch });
+  if (!Array.isArray(comments)) throw new Error('Kommentare konnten nicht geladen werden.');
+  return comments.reverse();
 }
 
 export function postNativeComment(issueId, message, clientRequestId, doFetch = fetch) {

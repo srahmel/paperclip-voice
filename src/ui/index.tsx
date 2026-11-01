@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
-import { routeTarget, vadDecision, voiceMessage } from '../lib/voice-utils.mjs';
+import { type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
+import { routeTarget, vadDecision, voiceMessage, cleanSpokenText } from '../lib/voice-utils.mjs';
+import { transcribeLocal, speakLocal } from '../lib/local-audio.mjs';
 import { paperclipApi, ensureNativeAgentChat, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
-type Phase = 'off' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
+type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
 type Agent = { id: string; name: string; status?: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
-type AudioResult = { audioBase64: string; mime: string; bytes: number };
-type Config = { language: string; voice: string; maxSpokenChars: number };
 
 const P: Record<string, CSSProperties> = {
   toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, padding: '12px 17px', borderRadius: 999, border: '1px solid #557', background: '#172236', color: '#fff', boxShadow: '0 4px 20px #0005', fontWeight: 600, cursor: 'pointer' },
@@ -42,33 +41,12 @@ function preferredMime(): string | undefined {
     .find((mime) => MediaRecorder.isTypeSupported(mime));
 }
 
-function bufferFromBase64(value: string): ArrayBuffer {
-  const raw = atob(value);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let result = '';
-  const chunk = 16_384;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    result += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(result);
-}
-
 function isAgentReply(comment: Comment): boolean {
   return Boolean((comment.authorAgentId || comment.authorType === 'agent') && !comment.deletedAt && comment.body?.trim());
 }
 
 export function VoiceOverlay({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? '';
-  const stt = usePluginAction('voice-transcribe');
-  const ttsComment = usePluginAction('voice-speak-comment');
-  const ttsStatus = usePluginAction('voice-speak-status');
-  const settings = usePluginData<Config>('voice-settings', { companyId });
-  const health = usePluginData<{ ready: boolean }>('voice-health', { companyId });
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
@@ -143,12 +121,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       .catch((cause) => setError(`Agenten konnten nicht geladen werden: ${friendlyError(cause)}`));
   }, [opened, companyId]);
 
-  async function playAudio(result: AudioResult, epoch: number): Promise<void> {
-    if (!active(epoch) || !result.audioBase64) return;
+  async function playAudio(result: ArrayBuffer, epoch: number): Promise<void> {
+    if (!active(epoch) || !result.byteLength) return;
     const audioCtx = audioContextRef.current;
     if (!audioCtx) return;
     setPhase('speaking');
-    const decoded = await audioCtx.decodeAudioData(bufferFromBase64(result.audioBase64));
+    const decoded = await audioCtx.decodeAudioData(result);
     if (!active(epoch)) return;
     await audioCtx.resume();
     await new Promise<void>((resolve, reject) => {
@@ -164,7 +142,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function sayStatus(status: string, epoch: number): Promise<void> {
-    const result = await ttsStatus({ companyId, status }) as AudioResult;
+    const messages: Record<string, string> = { submitted: 'Gesendet.', no_speech: 'Ich habe nichts verstanden.' };
+    const result = await speakLocal(companyId, messages[status] ?? status);
     await playAudio(result, epoch);
   }
 
@@ -179,7 +158,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       for (const comment of comments) seenCommentIdsRef.current.add(comment.id);
       if (newReplies.length) {
         const latest = newReplies[newReplies.length - 1];
-        const spoken = await ttsComment({ companyId, issueId: issue, commentId: latest.id }) as AudioResult;
+        const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text);
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch);
         if (!active(epoch)) return;
@@ -200,7 +179,6 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const selected = targetRef.current;
     if (!selected) throw new Error('Wähle zuerst einen Agenten oder eine Aufgabe.');
     setPhase('sending');
-    const firstTurn = activeIssueIdRef.current === null;
     const issue = activeIssueIdRef.current ?? await resolveIssue(companyId, selected);
     if (!active(epoch)) return;
     activeIssueIdRef.current = issue;
@@ -208,15 +186,17 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
     // Establish a baseline BEFORE submitting; never read an old reply aloud.
     const before = await apiComments(issue);
-    if (firstTurn) for (const c of before) seenCommentIdsRef.current.add(c.id);
+    for (const c of before) seenCommentIdsRef.current.add(c.id);
     if (!active(epoch)) return;
     const clientRequestId = crypto.randomUUID();
     const message = voiceMessage(text, conciseReplyRef.current);
     // Native authenticated Paperclip user operation, not a parallel plugin agent chat.
     // 5xx or transport failure is an UNKNOWN outcome: never retry automatically.
-    await postNativeComment(issue, message, clientRequestId);
+    try { await postNativeComment(issue, message, clientRequestId); }
+    catch { throw new Error('Senden möglicherweise erfolgt. Bitte den Chat prüfen, bevor du erneut sendest.'); }
     if (!active(epoch)) return;
-    await sayStatus('submitted', epoch);
+    try { await sayStatus('submitted', epoch); }
+    catch { throw new Error('Nachricht wurde gesendet, aber die Sprachausgabe ist ausgefallen. Bitte den Chat prüfen.'); }
     if (active(epoch)) await waitForAgent(issue, epoch);
   }
 
@@ -225,11 +205,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       setPhase('transcribing');
       if (blob.size < 500 || blob.size > 2 * 1024 * 1024) throw new Error('Audioaufnahme ist zu kurz oder zu groß (max. 2 MiB).');
-      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const text = await transcribeLocal(companyId, blob);
       if (!active(epoch)) return;
-      const transcription = await stt({ companyId, mimeType: blob.type || 'audio/webm', audioBase64: toBase64(bytes) }) as { text: string };
-      if (!active(epoch)) return;
-      const text = transcription.text?.trim() ?? '';
       if (!text) {
         await sayStatus('no_speech', epoch);
         if (active(epoch)) await startCapture(epoch);
@@ -239,7 +216,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       if (!autoSendRef.current) { setPhase('review'); return; }
       await submitTranscript(text, epoch);
     } catch (cause) {
-      if (active(epoch)) { setError(friendlyError(cause)); setPhase('error'); }
+      if (active(epoch)) { teardown(); setError(friendlyError(cause)); setPhase('error'); }
     }
   }
 
@@ -268,7 +245,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
           silenceIntervalRef.current = null;
           const latest = newReplies[newReplies.length - 1];
-          const spoken = await ttsComment({ companyId, issueId: currentIssue, commentId: latest.id }) as AudioResult;
+          const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text);
           if (!active(epoch)) return;
           setLastReply(latest.body ?? '');
           await playAudio(spoken, epoch);
@@ -276,7 +253,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (autoContinueRef.current) await startCapture(epoch);
           else setPhase('ready');
         } catch (cause) {
-          if (active(epoch)) setError(`Antwort-Beobachtung: ${friendlyError(cause)}`);
+          if (active(epoch)) { teardown(); setError(`Antwort-Beobachtung: ${friendlyError(cause)}`); setPhase('error'); }
         } finally {
           monitorBusyRef.current = false;
         }
@@ -339,14 +316,14 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function startSession(): Promise<void> {
+    if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
     if (!companyId || !targetRef.current) { setError('Wähle zunächst Alex, einen anderen Agenten oder eine Aufgabe.'); return; }
-    if (health.data?.ready === false) { setError('Lokaler Voicebox-Dienst ist nicht erreichbar. Prüfe Docker und Plugin-Konfiguration.'); return; }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
     teardown();
     setError(null);
     setLastReply('');
     setLastTranscript('');
-    setPhase('ready');
+    setPhase('starting');
     const epoch = epochRef.current;
     try {
       const ctx = new AudioContext();
@@ -361,14 +338,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       analyserRef.current = analyser;
       await startCapture(epoch);
     } catch (cause) {
-      setError(`Mikrofon konnte nicht gestartet werden: ${friendlyError(cause)}`);
+      if (epoch !== epochRef.current) return;
       teardown();
+      setError(`Mikrofon konnte nicht gestartet werden: ${friendlyError(cause)}`);
       setPhase('error');
     }
   }
 
   const targetLabel = target ? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : agents.find(a => a.id === target.ref)?.name ?? target.ref) : 'Kein Ziel';
-  const canStart = phase === 'off' || phase === 'error' || phase === 'ready';
+  const canStart = phase === 'off' || phase === 'error';
 
   return <>
     <button type="button" style={P.toggle} aria-label="Paperclip Voice öffnen" onClick={() => setOpened(v => !v)}>
@@ -380,8 +358,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         <button type="button" style={P.button} onClick={() => setOpened(false)} aria-label="Panel schließen">×</button>
       </header>
       <p style={P.muted}>Lokales Whisper + Piper · Original-Paperclip-Chat · Windows / Linux</p>
-      <p><strong>Status:</strong> {({ off: 'Aus', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
-      <p style={P.muted}>Audiodienst: {health.loading ? 'Prüfe …' : health.data?.ready ? 'lokal erreichbar' : 'nicht erreichbar'} · {settings.data?.language ?? 'de'}</p>
+      <p><strong>Status:</strong> {({ off: 'Aus', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
+      <p style={P.muted}>Lokale Whisper- und Piper-Laufzeit · automatische Spracherkennung</p>
       <label htmlFor="voice-target" style={{ display: 'block', marginTop: 8 }}>Zielkonversation</label>
       <select id="voice-target" style={P.field} value={target ? `${target.kind}:${target.ref}` : ''} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => {
         if (!event.target.value) return setTarget(null);
@@ -390,6 +368,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       }}>
         <option value="">Agent wählen …</option>
         {target?.kind === 'issue' && <option value={`issue:${target.ref}`}>Aktuelle Aufgabe {target.ref.slice(0, 8)}</option>}
+        {target?.kind === 'chat' && !agents.some(a => a.id === target.ref) && <option value={`chat:${target.ref}`}>Aktueller Chat: {target.ref}</option>}
         {agents.map(a => <option key={a.id} value={`chat:${a.id}`}>{a.name}</option>)}
       </select>
       <p style={P.muted}>Aktiv: {targetLabel}{issueId ? <a style={{ color: '#c3dcff', marginLeft: 7 }} href={`/issues/${encodeURIComponent(issueId)}`}>Chat öffnen</a> : null}</p>
@@ -401,7 +380,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <div>
         {canStart ? <button type="button" style={P.button} onClick={() => void startSession()}>Sprachmodus starten</button> : null}
         {phase !== 'off' && <button type="button" style={P.button} onClick={() => { teardown(); setError(null); }}>Stoppen</button>}
-        {(phase === 'waiting' || phase === 'ready') && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
+        {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
         {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { setError(friendlyError(cause)); setPhase('error'); })}>Transkript absenden</button>}
       </div>
       {lastTranscript && <div style={{ marginTop: 12 }}><strong>Zuletzt verstanden</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}

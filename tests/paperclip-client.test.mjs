@@ -44,7 +44,7 @@ test('network/server failure has unknown outcome and never auto-retries comment 
 test('agent follow-up reads native issue comments and does not create a new agent session', async () => {
   const comments = [{ id: 'reply', authorAgentId: 'agent-1', body: 'Task done' }];
   const doFetch = async (url, options) => {
-    assert.equal(url, '/api/issues/issue-42/comments?order=asc&limit=100');
+    assert.equal(url, '/api/issues/issue-42/comments?order=desc&limit=100');
     assert.equal(options.method, 'GET');
     return { ok: true, json: async () => comments };
   };

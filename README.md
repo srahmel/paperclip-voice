@@ -1,5 +1,13 @@
 # Paperclip Voice
 
+> **Lokaler Sprachdialog (Arbeitsstand):** Die Plugin-Oberfläche verwendet die
+> bereits in Paperclip integrierten `/local-dictation`- und `/local-speech`-Routen.
+> Dafür müssen die Patches unter `dictation/` und die lokale Whisper-/Piper-Laufzeit
+> installiert sein. Die nachfolgenden Voicebox-Installationshinweise beschreiben
+> den früheren Stand und gelten für diese Oberfläche nicht mehr. Der Sprachdialog
+> muss vor produktiver Nutzung einschließlich Plugin-Installation und Mikrofon im
+> Zielbrowser geprüft werden.
+
 [![Cross-platform build and tests](https://github.com/srahmel/paperclip-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/srahmel/paperclip-voice/actions/workflows/ci.yml)
 
 **Local speech-to-text and text-to-speech for existing [Paperclip](https://github.com/paperclipai/paperclip) agent chats and issues.** A separate, open-source plugin for Windows and Linux.
