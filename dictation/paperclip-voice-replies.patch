@@ -1,0 +1,509 @@
+diff --git a/ui/src/components/ChatComposer.tsx b/ui/src/components/ChatComposer.tsx
+index d7b80323a..09cb8fb83 100644
+--- a/ui/src/components/ChatComposer.tsx
++++ b/ui/src/components/ChatComposer.tsx
+@@ -11,7 +11,8 @@ import {
+ } from "react";
+ import { AlertTriangle, Check, Loader2, Paperclip, Send } from "lucide-react";
+ import { cn } from "../lib/utils";
+-import { LocalDictation, appendDictation } from "./LocalDictation";
++import { LocalDictation } from "./LocalDictation";
++import { appendVoiceTranscript, VoiceReplyControl, type useVoiceReply } from "./VoiceReply";
+ 
+ /**
+  * Shared chat composer (PAP-95a / PAP-96).
+@@ -45,6 +46,7 @@ export interface ChatComposerHandle {
+ 
+ export interface ChatComposerProps {
+   companyId?: string | null;
++  voiceReply?: ReturnType<typeof useVoiceReply>;
+   value: string;
+   onChange: (value: string) => void;
+   onSubmit: () => void;
+@@ -113,6 +115,7 @@ function dragHasFiles(evt: ReactDragEvent<HTMLDivElement>): boolean {
+ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
+   {
+     companyId,
++    voiceReply,
+     value,
+     onChange,
+     onSubmit,
+@@ -334,7 +337,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
+       ) : null}
+ 
+       <div className="mt-2 flex items-center gap-2">
+-        {companyId ? <LocalDictation key={companyId} companyId={companyId} disabled={disabled} onText={(text) => onChange(appendDictation(valueRef.current, text))} /> : null}
++        {companyId ? <LocalDictation key={companyId} companyId={companyId} disabled={disabled} onText={(text) => onChange(appendVoiceTranscript(valueRef.current, text))} onStart={voiceReply?.beginDictation} onDictated={voiceReply?.markDictated} /> : null}
++        {voiceReply ? <VoiceReplyControl voice={voiceReply} /> : null}
+         {canAttach ? (
+           <>
+             <input
+diff --git a/ui/src/components/IssueChatThread.tsx b/ui/src/components/IssueChatThread.tsx
+index 127683ca3..f05550b9a 100644
+--- a/ui/src/components/IssueChatThread.tsx
++++ b/ui/src/components/IssueChatThread.tsx
+@@ -264,7 +264,8 @@ import {
+ import { SourceTrustBadge } from "./SourceTrustBadge";
+ import { CommentAttributionChip } from "./CommentAttributionChip";
+ import { resolveCommentAttribution } from "../lib/comment-attribution";
+-import { LocalDictation, appendDictation } from "./LocalDictation";
++import { LocalDictation } from "./LocalDictation";
++import { appendVoiceTranscript, VoiceReplyControl, useVoiceReply } from "./VoiceReply";
+ 
+ interface IssueChatMessageContext {
+   feedbackDataSharingPreference: FeedbackDataSharingPreference;
+@@ -513,6 +514,7 @@ export interface IssueChatComposerHandle {
+ }
+ 
+ interface IssueChatComposerProps {
++  voiceReply?: ReturnType<typeof useVoiceReply>;
+   onSend: IssueChatThreadProps["onAdd"];
+   confirmedSubmissionIds: ReadonlySet<string>;
+   onReviewConversation?: () => Promise<void>;
+@@ -4649,6 +4651,7 @@ const IssueChatComposer = forwardRef<
+   IssueChatComposerProps
+ >(function IssueChatComposer(
+   {
++    voiceReply,
+     onSend,
+     confirmedSubmissionIds,
+     onReviewConversation,
+@@ -5601,7 +5604,8 @@ const IssueChatComposer = forwardRef<
+ 
+       <div className="flex flex-wrap items-center justify-end gap-3">
+         <div className="mr-auto flex items-center gap-2">
+-          <LocalDictation key={`${companyId}:${draftKey}`} companyId={companyId} disabled={!!uncertainSubmission} onText={(text) => changeBody((current) => appendDictation(current, text))} />
++          <LocalDictation key={`${companyId}:${draftKey}`} companyId={companyId} disabled={!!uncertainSubmission} onText={(text) => changeBody((current) => appendVoiceTranscript(current, text))} onStart={voiceReply?.beginDictation} onDictated={voiceReply?.markDictated} />
++          {voiceReply ? <VoiceReplyControl voice={voiceReply} /> : null}
+           {canAcceptFiles ? (
+             <input ref={attachInputRef} type="file" className="hidden" onChange={handleAttachFile} />
+           ) : null}
+@@ -5859,6 +5863,7 @@ export function IssueChatThread({
+   externalReferences,
+   linkCaseReferences = false,
+ }: IssueChatThreadProps) {
++  const voiceReply = useVoiceReply(comments, draftKey ?? issueId);
+   const workspaceRetry = useCurrentWorkspaceRetry();
+   const location = useLocation();
+   const lastScrolledHashRef = useRef<string | null>(null);
+@@ -6121,6 +6126,7 @@ export function IssueChatThread({
+   }, [submissionPending, onRefreshLatestComments]);
+   const sendComposerComment = useCallback<IssueChatThreadProps["onAdd"]>(
+     async (body, reopen, reassignment, attachmentIds, clientRequestId, runSettings) => {
++      voiceReply.beforeSubmit(body);
+       pendingSubmitScrollRef.current = true;
+       if (issueAssigneeAgentId) {
+         submissionRequestId.current = clientRequestId ?? null;
+@@ -6134,12 +6140,13 @@ export function IssueChatThread({
+         setSubmissionPending(false);
+         setSubmissionTakingLonger(false);
+       } catch (error) {
++        voiceReply.submitFailed();
+         setSubmissionPending(error instanceof CommentSubmissionUnknownError);
+         setSubmissionTakingLonger(error instanceof CommentSubmissionUnknownError);
+         throw error;
+       }
+     },
+-    [onAdd, issueAssigneeAgentId],
++    [onAdd, issueAssigneeAgentId, voiceReply.beforeSubmit, voiceReply.submitFailed],
+   );
+   const runtime = usePaperclipIssueRuntime({
+     messages,
+@@ -6805,6 +6812,7 @@ export function IssueChatThread({
+               className="sticky bottom-(--sz-calc-8) z-20 space-y-2 bg-gradient-to-t from-background via-background/95 to-background/0 pt-6"
+             >
+               <IssueChatComposer
++                voiceReply={voiceReply}
+                 ref={composerRef}
+                 onSend={sendComposerComment}
+                 onReviewConversation={onReviewConversation}
+diff --git a/ui/src/components/LocalDictation.tsx b/ui/src/components/LocalDictation.tsx
+index f4c0a4434..3e39e3041 100644
+--- a/ui/src/components/LocalDictation.tsx
++++ b/ui/src/components/LocalDictation.tsx
+@@ -10,8 +10,8 @@ export function appendDictation(draft: string, text: string) {
+   return draft + (draft && !/\s$/.test(draft) ? " " : "") + clean;
+ }
+ 
+-export function LocalDictation({ companyId, disabled, onText }: {
+-  companyId?: string | null; disabled?: boolean; onText: (text: string) => void;
++export function LocalDictation({ companyId, disabled, onText, onDictated, onStart }: {
++  companyId?: string | null; disabled?: boolean; onText: (text: string) => void; onDictated?: (language: string) => void; onStart?: () => void;
+ }) {
+   const [phase, setPhase] = useState<Phase>("idle");
+   const [error, setError] = useState("");
+@@ -57,6 +57,7 @@ export function LocalDictation({ companyId, disabled, onText }: {
+       return;
+     }
+     if (phaseRef.current !== "idle" || !companyId || disabled) return;
++    onStart?.();
+     setError("");
+     transition("starting");
+     const id = ++epoch.current;
+@@ -98,6 +99,7 @@ export function LocalDictation({ companyId, disabled, onText }: {
+           if (id !== epoch.current) return;
+           if (typeof result.text !== "string" || !result.text.trim()) throw new Error("Keine Sprache erkannt.");
+           onTextRef.current(result.text);
++          onDictated?.(language);
+           transition("idle");
+         } catch (e) {
+           if (id === epoch.current) { transition("idle"); setError(e instanceof Error && e.name !== "AbortError" ? e.message : "Transkription abgebrochen oder Zeitlimit erreicht."); }
+diff --git a/ui/src/components/TaskChatThread.tsx b/ui/src/components/TaskChatThread.tsx
+index 8d77a9b03..45daf8cd5 100644
+--- a/ui/src/components/TaskChatThread.tsx
++++ b/ui/src/components/TaskChatThread.tsx
+@@ -1,5 +1,6 @@
+ import { TaskChatShimmerScope } from "@/components/task-chat/TaskChatShimmer";
+ import { CommentSubmissionUnknownError } from "../lib/comment-submit-result";
++import { useVoiceReply } from "@/components/VoiceReply";
+ import {
+   ISSUE_DETAIL_CONTENT_PAINT_MARK,
+   ISSUE_DETAIL_CONTENT_MEASURE,
+@@ -572,6 +573,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
+     resumeAssigneePending = false,
+     onOpenSkill,
+   } = props;
++  const voiceReply = useVoiceReply(comments, draftKey ?? issueId);
+   const retryFailedRunHandler =
+     isTerminalIssueStatus(issueStatus) ||
+     interactions?.some((interaction) => interaction.status === "pending") ||
+@@ -2657,6 +2659,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
+   }, [runnerSubmissionPending, tailRunId]);
+   const handleThreadAdd = useCallback(
+     async (...args: Parameters<typeof onAdd>) => {
++      voiceReply.beforeSubmit(args[0]);
+       if (hasAgentAssignee) {
+         submissionRequestId.current = args[4] ?? null;
+         setRunnerSubmissionPending(true);
+@@ -2672,12 +2675,13 @@ export function TaskChatThread(props: TaskChatThreadProps) {
+           setTakeoverMode("normal");
+         }
+       } catch (error) {
++        voiceReply.submitFailed();
+         setRunnerSubmissionPending(error instanceof CommentSubmissionUnknownError);
+         setSubmissionTakingLonger(error instanceof CommentSubmissionUnknownError);
+         throw error;
+       }
+     },
+-    [hasAgentAssignee, onAdd, selectedPendingInput, dismissInput],
++    [hasAgentAssignee, onAdd, selectedPendingInput, dismissInput, voiceReply.beforeSubmit, voiceReply.submitFailed],
+   );
+   const optimisticRunnerStartup =
+     hasAgentAssignee &&
+@@ -3303,6 +3307,7 @@ export function TaskChatThread(props: TaskChatThreadProps) {
+                       ) : null}
+                       <div className="relative z-10">
+                         <TaskChatComposer
++                          voiceReply={voiceReply}
+                           onAdd={handleThreadAdd}
+                           confirmedSubmissionIds={new Set(comments.filter((comment) =>
+                             comment.authorUserId === currentUserId && comment.clientRequestId &&
+diff --git a/ui/src/components/VoiceReply.test.tsx b/ui/src/components/VoiceReply.test.tsx
+new file mode 100644
+index 000000000..0812e18fa
+--- /dev/null
++++ b/ui/src/components/VoiceReply.test.tsx
+@@ -0,0 +1,72 @@
++// @vitest-environment jsdom
++import { act } from "react";
++import { createRoot } from "react-dom/client";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { appendVoiceTranscript, useVoiceReply, VoiceReplyControl, VOICE_SHORT_REQUEST } from "./VoiceReply";
++
++(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
++afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
++
++describe("voice replies", () => {
++  it("keeps the short-answer request visible, editable and present only once", () => {
++    const first = appendVoiceTranscript("Existing", "Hallo");
++    expect(first).toBe(`Existing Hallo\n\n${VOICE_SHORT_REQUEST}`);
++    const second = appendVoiceTranscript(first, "noch etwas");
++    expect(second).toBe(`Existing Hallo noch etwas\n\n${VOICE_SHORT_REQUEST}`);
++  });
++  it("reads only a new agent reply after a dictated draft is submitted, and stops on unmount", async () => {
++    const spoken = vi.fn();
++    const cancel = vi.fn();
++    const localVoice = { localService: true, lang: "de-DE", default: true };
++    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [localVoice], speak: spoken, cancel } });
++    vi.stubGlobal("SpeechSynthesisUtterance", class { text: string; constructor(text: string) { this.text = text; } });
++    const old = { id: "old", body: "Old reply", authorType: "agent", createdAt: new Date() };
++    let voice!: ReturnType<typeof useVoiceReply>;
++    function Harness({ comments }: { comments: typeof old[] }) {
++      voice = useVoiceReply(comments, "thread");
++      return <VoiceReplyControl voice={voice} />;
++    }
++    const container = document.createElement("div");
++    const root = createRoot(container);
++    await act(async () => { root.render(<Harness comments={[old]} />); });
++    expect(spoken).not.toHaveBeenCalled();
++    await act(async () => { voice.markDictated("de"); voice.beforeSubmit("My message"); });
++    await act(async () => { root.render(<Harness comments={[old, { id: "human", body: "message", authorType: "user", createdAt: new Date() }]} />); });
++    expect(spoken).not.toHaveBeenCalled();
++    await act(async () => { root.render(<Harness comments={[old, { id: "new", body: "Kurze Antwort.", authorType: "agent", createdAt: new Date() }]} />); });
++    expect(spoken).toHaveBeenCalledTimes(1);
++    expect(spoken.mock.calls[0]![0].text).toBe("Kurze Antwort.");
++    expect(spoken.mock.calls[0]![0].voice).toBe(localVoice);
++    await act(async () => root.unmount());
++    expect(cancel).toHaveBeenCalledTimes(1);
++  });
++  it("does not use remote voices and shows an actionable error", async () => {
++    const spoken = vi.fn();
++    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [{ localService: false, lang: "de-DE" }], speak: spoken, cancel: vi.fn() } });
++    vi.stubGlobal("SpeechSynthesisUtterance", class {});
++    let voice!: ReturnType<typeof useVoiceReply>;
++    function Harness() { voice = useVoiceReply([], "thread"); return <VoiceReplyControl voice={voice} />; }
++    const container = document.createElement("div");
++    const root = createRoot(container);
++    await act(async () => { root.render(<Harness />); });
++    await act(async () => { voice.speak("Hallo"); });
++    expect(spoken).not.toHaveBeenCalled();
++    expect(container.textContent).toContain("Keine lokale Stimme");
++    await act(async () => root.unmount());
++  });
++  it("does not arm after the user disables output", async () => {
++    const spoken = vi.fn();
++    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: { getVoices: () => [{ localService: true, lang: "de-DE" }], speak: spoken, cancel: vi.fn() } });
++    vi.stubGlobal("SpeechSynthesisUtterance", class {});
++    let voice!: ReturnType<typeof useVoiceReply>;
++    function Harness({ comments }: { comments: { id: string; body: string; authorType: string; createdAt: Date }[] }) {
++      voice = useVoiceReply(comments, "thread"); return <VoiceReplyControl voice={voice} />;
++    }
++    const container = document.createElement("div"); const root = createRoot(container);
++    await act(async () => { root.render(<Harness comments={[]} />); });
++    await act(async () => { voice.toggle(); voice.markDictated("de"); voice.beforeSubmit("message"); });
++    await act(async () => { root.render(<Harness comments={[{ id: "new", body: "reply", authorType: "agent", createdAt: new Date() }]} />); });
++    expect(spoken).not.toHaveBeenCalled();
++    await act(async () => root.unmount());
++  });
++});
+diff --git a/ui/src/components/VoiceReply.tsx b/ui/src/components/VoiceReply.tsx
+new file mode 100644
+index 000000000..35526303c
+--- /dev/null
++++ b/ui/src/components/VoiceReply.tsx
+@@ -0,0 +1,124 @@
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { Volume2, VolumeX } from "lucide-react";
++
++export const VOICE_SHORT_REQUEST = "[Sprachmodus: Bitte antworte möglichst in ein bis drei kurzen, gut vorlesbaren Sätzen. Wichtige Details und Arbeitsergebnisse weiterhin vollständig dokumentieren.]";
++
++export function appendVoiceTranscript(draft: string, text: string) {
++  const clean = text.trim();
++  if (!clean) return draft;
++  const hasSuffix = draft.trimEnd().endsWith(VOICE_SHORT_REQUEST);
++  const base = hasSuffix ? draft.trimEnd().slice(0, -VOICE_SHORT_REQUEST.length).trimEnd() : draft;
++  return `${base}${base && !/\s$/.test(base) ? " " : ""}${clean}\n\n${VOICE_SHORT_REQUEST}`;
++}
++
++type Comment = {
++  id: string; body: string; authorType?: string | null; authorAgentId?: string | null;
++  authorUserId?: string | null;
++  derivedAuthorAgentId?: string | null; deletedAt?: Date | string | null;
++  createdAt: Date | string; presentation?: { kind?: string } | null;
++};
++
++export function spokenReplyText(text: string) {
++  return text.replace(/```[\s\S]*?```/g, " Code steht im Chat. ")
++    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
++    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
++    .replace(/https?:\/\/\S+/g, " Link im Chat ")
++    .replace(/^\s*#{1,6}\s*/gm, "").replace(/[\*_`~]/g, "")
++    .replace(/\s+/g, " ").trim();
++}
++
++export function useVoiceReply(comments: readonly Comment[], contextKey: string | null | undefined) {
++  const [enabled, setEnabled] = useState(true);
++  const [status, setStatus] = useState("");
++  const [lastText, setLastText] = useState("");
++  const enabledRef = useRef(true);
++  const commentsRef = useRef(comments);
++  commentsRef.current = comments;
++  const pending = useRef(false);
++  const language = useRef("de");
++  const armed = useRef<{ seen: Set<string>; since: number } | null>(null);
++  const speaking = useRef(false);
++  const epoch = useRef(0);
++
++  const stop = useCallback(() => {
++    epoch.current++;
++    if (speaking.current && typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
++    speaking.current = false;
++  }, []);
++  const speak = useCallback((raw: string) => {
++    const text = spokenReplyText(raw);
++    if (!text) return;
++    setLastText(text);
++    const synth = window.speechSynthesis;
++    if (!synth || typeof SpeechSynthesisUtterance === "undefined") { setStatus("Sprachausgabe in diesem Browser nicht verfügbar."); return; }
++    let voices: SpeechSynthesisVoice[];
++    try { voices = synth.getVoices(); } catch { setStatus("Sprachausgabe nicht verfügbar."); return; }
++    const local = voices.filter((voice) => voice.localService && voice.lang.toLowerCase().startsWith(language.current));
++    if (!local.length) { setStatus("Keine lokale Stimme gefunden. Prüfe die Spracheinstellungen deines Geräts."); return; }
++    stop();
++    const id = epoch.current;
++    // Short utterances avoid browser limits while retaining the entire response.
++    const parts = text.match(/.{1,200}(?:\s|$)|\S{1,200}/g) ?? [text];
++    speaking.current = true;
++    setStatus("Antwort wird vorgelesen.");
++    try {
++      parts.forEach((part, index) => {
++        const utterance = new SpeechSynthesisUtterance(part.trim());
++        utterance.voice = local.find((voice) => voice.default) ?? local[0]!;
++        utterance.lang = utterance.voice.lang;
++        utterance.onerror = () => { if (epoch.current === id) { stop(); setStatus("Vorlesen fehlgeschlagen. Du kannst es erneut versuchen."); } };
++        utterance.onend = () => { if (epoch.current === id && index === parts.length - 1) { speaking.current = false; setStatus(""); } };
++        synth.speak(utterance);
++      });
++    } catch { stop(); setStatus("Vorlesen fehlgeschlagen. Du kannst es erneut versuchen."); }
++  }, [stop]);
++
++  const markDictated = useCallback((selectedLanguage: string) => {
++    pending.current = true;
++    language.current = selectedLanguage === "en" ? "en" : "de";
++  }, []);
++  const beginDictation = useCallback(() => { armed.current = null; pending.current = false; stop(); setStatus(""); }, [stop]);
++  const beforeSubmit = useCallback((body: string) => {
++    if (!enabledRef.current || (!pending.current && !body.includes(VOICE_SHORT_REQUEST))) return;
++    pending.current = false;
++    armed.current = { seen: new Set(commentsRef.current.map((comment) => comment.id)), since: Date.now() - 1000 };
++    setStatus("Warte auf die Agentenantwort.");
++  }, []);
++  const submitFailed = useCallback(() => { armed.current = null; setStatus(""); }, []);
++  const stopPlayback = useCallback(() => { stop(); setStatus(""); }, [stop]);
++  const toggle = useCallback(() => {
++    enabledRef.current = !enabledRef.current;
++    setEnabled(enabledRef.current);
++    if (!enabledRef.current) { armed.current = null; stop(); setStatus(""); }
++  }, [stop]);
++
++  useEffect(() => {
++    const waiting = armed.current;
++    if (!waiting || !enabledRef.current) return;
++    const response = comments.find((comment) => !waiting.seen.has(comment.id) && !comment.deletedAt &&
++      comment.authorType !== "system" && comment.presentation?.kind !== "system_notice" &&
++      (comment.authorType === "agent" || comment.authorAgentId || comment.derivedAuthorAgentId || comment.authorUserId === "board-concierge") &&
++      new Date(comment.createdAt).getTime() >= waiting.since && comment.body?.trim());
++    if (response) { armed.current = null; speak(response.body); }
++  }, [comments, speak]);
++  useEffect(() => () => { armed.current = null; pending.current = false; stop(); }, [contextKey, stop]);
++  const latestReply = useMemo(() => comments.filter((comment) => !comment.deletedAt && comment.authorType !== "system" &&
++    comment.presentation?.kind !== "system_notice" &&
++    (comment.authorType === "agent" || comment.authorAgentId || comment.derivedAuthorAgentId || comment.authorUserId === "board-concierge") && comment.body?.trim())
++    .reduce<Comment | undefined>((latest, comment) => !latest || new Date(comment.createdAt).getTime() > new Date(latest.createdAt).getTime() ? comment : latest, undefined), [comments]);
++  return { enabled, status, lastText, latestReply: latestReply?.body ?? "", toggle, stop: stopPlayback, speak, beginDictation, markDictated, beforeSubmit, submitFailed };
++}
++
++export function VoiceReplyControl({ voice }: { voice: ReturnType<typeof useVoiceReply> }) {
++  return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
++    <button type="button" onClick={voice.toggle} aria-label={voice.enabled ? "Antwort vorlesen ausschalten" : "Antwort vorlesen einschalten"}
++      title={voice.enabled ? "Antwort vorlesen: an" : "Antwort vorlesen: aus"} className="grid size-8 place-items-center rounded-md hover:bg-accent">
++      {voice.enabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
++    </button>
++    {voice.latestReply ? <button type="button" onClick={() => voice.speak(voice.latestReply)} className="hover:underline">Letzte Antwort vorlesen</button> : null}
++    {voice.status ? <span role="status">{voice.status}</span> : null}
++    {voice.status.includes("vorgelesen") ? <button type="button" onClick={voice.stop}>Stopp</button> : null}
++    {voice.lastText && (voice.status.includes("fehlgeschlagen") || voice.status.includes("Keine lokale Stimme")) ?
++      <button type="button" onClick={() => voice.speak(voice.lastText)}>Erneut vorlesen</button> : null}
++  </span>;
++}
+diff --git a/ui/src/components/task-chat/TaskChatComposer.tsx b/ui/src/components/task-chat/TaskChatComposer.tsx
+index fd5159b89..000516d9c 100644
+--- a/ui/src/components/task-chat/TaskChatComposer.tsx
++++ b/ui/src/components/task-chat/TaskChatComposer.tsx
+@@ -65,7 +65,8 @@ import { TaskChatPausedTakeover, type TaskComposerPause } from "./TaskChatPaused
+ import { ComposerRunSettingsPicker } from "./ComposerRunSettingsPicker";
+ import { TaskChatComposerBar } from "./TaskChatComposerBar";
+ import { ComposerAddMenu, ComposerModeChip, ComposerPrivacyChip } from "./ComposerAddMenu";
+-import { LocalDictation, appendDictation } from "@/components/LocalDictation";
++import { LocalDictation } from "@/components/LocalDictation";
++import { appendVoiceTranscript, VoiceReplyControl, type useVoiceReply } from "@/components/VoiceReply";
+ import type { ComposerRunSettings } from "./composer-run-settings";
+ import type { Agent, IssueAssigneeAdapterOverrides } from "@paperclipai/shared";
+ 
+@@ -92,6 +93,7 @@ export interface TaskChatComposerTakeover {
+ }
+ 
+ interface TaskChatComposerProps {
++  voiceReply?: ReturnType<typeof useVoiceReply>;
+   onAdd?: (
+     body: string,
+     reopen?: boolean,
+@@ -377,6 +379,7 @@ function escapeMarkdownLabel(name: string): string {
+  * states) between the editor and the comp-bar.
+  */
+ export function TaskChatComposer({
++  voiceReply,
+   onAdd,
+   creation,
+   confirmedSubmissionIds,
+@@ -1460,7 +1463,8 @@ export function TaskChatComposer({
+             data-testid="task-chat-composer-actions"
+           >
+             <div className="flex min-w-0 max-w-full items-center gap-2">
+-            <LocalDictation key={`${companyId}:${draftKey}:${queuedEdit?.commentId ?? ""}`} companyId={companyId} disabled={disabled || !!uncertainSubmission || !!queuedEdit} onText={(text) => changeBody(appendDictation(bodyRef.current, text))} />
++            <LocalDictation key={`${companyId}:${draftKey}:${queuedEdit?.commentId ?? ""}`} companyId={companyId} disabled={disabled || !!uncertainSubmission || !!queuedEdit} onText={(text) => changeBody(appendVoiceTranscript(bodyRef.current, text))} onStart={voiceReply?.beginDictation} onDictated={voiceReply?.markDictated} />
++            {voiceReply ? <VoiceReplyControl voice={voiceReply} /> : null}
+             {canAcceptFiles ? (
+               <input ref={fileInputRef} type="file" className="hidden" multiple={Boolean(creation)} onChange={handleFileInputChange} />
+             ) : null}
+diff --git a/ui/src/pages/BoardChat.tsx b/ui/src/pages/BoardChat.tsx
+index b5c803967..d1cd8fbca 100644
+--- a/ui/src/pages/BoardChat.tsx
++++ b/ui/src/pages/BoardChat.tsx
+@@ -26,6 +26,7 @@ import {
+ import { Activity, ArrowDown, History, MessageSquarePlus, X } from "lucide-react";
+ import { ActivityFeed } from "../components/ActivityFeed";
+ import { ChatComposer, type ChatComposerHandle } from "../components/ChatComposer";
++import { useVoiceReply } from "../components/VoiceReply";
+ import {
+   AgentBubbleActionRow,
+   agentBubbleDateLabel,
+@@ -309,6 +310,7 @@ export function BoardChat() {
+     enabled: !!boardIssueId,
+     refetchInterval: 3000,
+   });
++  const voiceReply = useVoiceReply(comments ?? [], selectedCompanyId);
+ 
+   const sortedComments = (comments ?? [])
+     .slice()
+@@ -535,6 +537,7 @@ export function BoardChat() {
+     async (body: string) => {
+       const trimmed = body.trim();
+       if (!trimmed || sending || !selectedCompanyId) return;
++      voiceReply.beforeSubmit(trimmed);
+ 
+       // Show user message immediately
+       setOptimisticMessage(trimmed);
+@@ -591,6 +594,7 @@ export function BoardChat() {
+               } else if (event.type === "start" && event.issueId) {
+                 setBoardIssueId(event.issueId);
+               } else if (event.type === "error") {
++                voiceReply.submitFailed();
+                 setErrorText(
+                   event.message ||
+                     "The board assistant couldn't respond. Please try again.",
+@@ -618,6 +622,7 @@ export function BoardChat() {
+           queryClient.invalidateQueries({ queryKey: queryKeys.issues.comments(boardIssueId) });
+         }
+       } catch (err) {
++        voiceReply.submitFailed();
+         console.error("Board chat error:", err);
+         setStatusText("");
+         setErrorText(
+@@ -628,7 +633,7 @@ export function BoardChat() {
+         composerRef.current?.focus();
+       }
+     },
+-    [sending, selectedCompanyId, boardIssueId, queryClient],
++    [sending, selectedCompanyId, boardIssueId, queryClient, voiceReply.beforeSubmit, voiceReply.submitFailed],
+   );
+ 
+   const handleSend = useCallback(() => {
+@@ -951,6 +956,7 @@ export function BoardChat() {
+           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-background/0 px-6 pt-6 pb-5">
+             <ChatComposer
+               companyId={selectedCompanyId}
++              voiceReply={voiceReply}
+               ref={composerRef}
+               value={input}
+               onChange={setInput}
