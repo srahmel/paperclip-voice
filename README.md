@@ -1,5 +1,7 @@
 # Paperclip Voice
 
+[![Cross-platform build and tests](https://github.com/srahmel/paperclip-voice/actions/workflows/ci.yml/badge.svg)](https://github.com/srahmel/paperclip-voice/actions/workflows/ci.yml)
+
 **Local speech-to-text and text-to-speech for existing [Paperclip](https://github.com/paperclipai/paperclip) agent chats and issues.** A separate, open-source plugin for Windows and Linux.
 
 > **Status: alpha prototype.** The 18 isolated Node tests pass. A live Paperclip installation, a browser microphone, and a German Voicebox container have **not** yet been tested together. The Paperclip plugin SDK is evolving. This project is not currently a verified, production-ready release.
