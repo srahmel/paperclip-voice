@@ -1,28 +1,20 @@
 # Verification log — 1 November 2026
 
-## Passed in the development container
+## What is verified
 
-- **18 / 18** Node.js isolated tests for local speech API shapes, security limits, normal Paperclip issue/chat API requests, comment submission idempotency semantics, VAD rules and text cleanup.
-- TypeScript/TSX syntax parsed with the TypeScript compiler frontend for `src/manifest.ts`, `src/worker.ts` and `src/ui/index.tsx` (no parse diagnostics).
-- Public source-content scan: no known proprietary project names, personal IDs, business domains, local operator paths, secrets or voice recordings.
+- On the core-free plugin branch, all **25 isolated Node.js unit tests** pass.
+- The standalone TypeScript/React plugin compiles and builds on **Windows and Linux** using Node.js 24 in GitHub Actions.
+- The plugin uses authenticated Paperclip plugin actions and standard native issue/chat comment APIs. It does not require the legacy core audio routes.
+- Long inference runs asynchronously inside the plugin worker, avoiding the usual 30-second synchronous bridge limit.
 
-## Verified in published GitHub Actions (1 November 2026)
+[Cross-platform green CI run](https://github.com/srahmel/paperclip-voice/actions/runs/41340666001) for source commit `c2c3a3d83ad5e87612e10871960e0ba8af658c69`.
 
-- [Windows and Linux CI run](https://github.com/srahmel/paperclip-voice/actions/runs/41299789278): **both jobs passed** for source commit `f37e79f4d1a959125cec059dea887c9bb6fcf9d7`.
-- Each job completed `npm install`, 18 Node.js unit tests, `tsc --noEmit`, and the esbuild plugin build using Node.js 24.
-- These are **build and isolated-test** passes, not evidence that a real Paperclip browser/microphone/Voicebox setup works end to end.
+## Not verified (do not claim success)
 
-## Not run / cannot claim
+- A real Voicebox Docker image build, model download and runtime STT/TTS health check on the user's Windows computer or on Linux.
+- Plugin registration and loading on the user's locally customized Paperclip version.
+- Real microphone capture, German transcription, audio output, task wakeup and reply playback on a signed-in Paperclip browser session.
+- Mobile Tailscale HTTPS, microphone and Bluetooth behavior; particularly locked-screen/background recording.
+- The legacy Windows plugin-loader patch is not automatically applied. Compatibility has to be checked on the installed Paperclip revision.
 
-- **Full dependency install on the original development container**: npm registry DNS egress was unavailable there (`EAI_AGAIN registry.npmjs.org`); equivalent checks have since passed on GitHub Actions.
-- **Docker image build**: Docker engine is not installed in the development container.
-- **Real Paperclip plugin registration / end-to-end**: No access to the local running Paperclip instance, microphone or signed-in browser.
-- **Windows / Linux runtime verification**: CI matrix has been prepared, but no runs have executed yet.
-- **Mobile lock-screen usability**: unverified and not promised.
-
-## Source review notes
-
-- Manifest now includes `issue.comments.read`, needed for both speaking and monitoring the original Paperclip comments.
-- Voicebox's default English-only STT must be replaced by a multilingual model at image-build time.
-- The default German TTS voice is baked into the local image, not retrieved by the browser.
-- Native Paperclip calls use authenticated standard endpoints; plugin-created LLM sessions are intentionally absent.
+**Only the actual live acceptance checklist can establish end-to-end usability.** See [ACCEPTANCE.md](ACCEPTANCE.md).
