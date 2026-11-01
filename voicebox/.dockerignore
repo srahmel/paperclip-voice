@@ -1,0 +1,14 @@
+# Never bundle local models, recordings, credentials or diagnostics into builds.
+.env
+.env.*
+models/
+.cache/
+*.onnx
+*.onnx.json
+*.wav
+*.mp3
+*.webm
+*.ogg
+*.pem
+*.key
+*.log

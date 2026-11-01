@@ -1,0 +1,34 @@
+# Compatible with Linux Docker Engine and Windows Docker Desktop (Linux containers).
+# Do NOT publish this port on 0.0.0.0; the browser only contacts Paperclip.
+services:
+  voicebox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paperclip-voicebox-de:0.2.16
+    ports:
+      - "127.0.0.1:8790:8790"
+    environment:
+      VOICEBOX_BIND_ADDRESS: "0.0.0.0"
+      VOICEBOX_ALLOW_INSECURE_BIND: "true"
+      VOICEBOX_DEVICE: "cpu"
+      VOICEBOX_CPU_THREADS: "4"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      VOICEBOX_STT_MODEL: "Systran/faster-whisper-small"
+      VOICEBOX_STT_MODEL_REVISION: "main"
+      VOICEBOX_STT_HOTWORDS: "Paperclip"
+      VOICEBOX_PIPER_VOICE: "de_DE-thorsten-medium"
+      VOICEBOX_TTS_ENGINE: "piper"
+      VOICEBOX_MAX_AUDIO_SECONDS: "65"
+      VOICEBOX_MAX_UPLOAD_MB: "3"
+      VOICEBOX_MAX_INPUT_CHARS: "1200"
+    restart: unless-stopped
+    mem_limit: 4g
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8790/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
