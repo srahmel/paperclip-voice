@@ -20,7 +20,7 @@ dictation button still allows editing before sending.
 
 ## Use
 
-Open **Voice**, select the current issue or an agent, and press **Sprachmodus
+Open **Sprachmodus** using the waveform button, select the current issue or an agent, and press **Sprachmodus
 starten**. Allow microphone access. When you finish speaking, pause; the message
 is sent automatically. The agent's reply is read aloud and listening resumes.
 The short-answer request is visible in each submitted voice message. **Stoppen**

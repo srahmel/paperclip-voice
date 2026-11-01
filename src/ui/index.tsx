@@ -10,7 +10,7 @@ type Agent = { id: string; name: string; status?: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
 
 const P: Record<string, CSSProperties> = {
-  toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, padding: '12px 17px', borderRadius: 999, border: '1px solid #557', background: '#172236', color: '#fff', boxShadow: '0 4px 20px #0005', fontWeight: 600, cursor: 'pointer' },
+  toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, display: 'inline-flex', alignItems: 'center', gap: 9, padding: '11px 17px', borderRadius: 999, border: '1px solid #7186a9', background: '#172236', color: '#fff', boxShadow: '0 4px 20px #0005', fontWeight: 600, cursor: 'pointer' },
   panel: { position: 'fixed', right: 16, bottom: 78, zIndex: 10050, maxWidth: 'calc(100vw - 32px)', width: 375, maxHeight: 'calc(100dvh - 105px)', overflowY: 'auto', borderRadius: 14, border: '1px solid #718096', background: '#152031', color: '#fff', padding: 16, boxShadow: '0 8px 40px #0009', fontFamily: 'system-ui, sans-serif', fontSize: 14 },
   field: { display: 'block', width: '100%', marginTop: 6, marginBottom: 10, background: '#263750', color: '#fff', border: '1px solid #6b778d', borderRadius: 8, padding: 9, fontSize: 14 },
   button: { borderRadius: 8, padding: '9px 12px', background: '#3a5a8b', color: 'white', border: '1px solid #8290a9', marginRight: 6, marginBottom: 6, cursor: 'pointer' },
@@ -352,15 +352,18 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const canStart = phase === 'off' || phase === 'error';
 
   return <>
-    <button type="button" style={P.toggle} aria-label="Paperclip Voice öffnen" onClick={() => setOpened(v => !v)}>
-      {phase === 'listening' ? '● Mikrofon aktiv' : '◉ Voice'}
+    <button type="button" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
+      <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
+      </svg>
+      <span>{phase !== 'off' && phase !== 'error' ? 'Sprachmodus aktiv' : 'Sprachmodus'}</span>
     </button>
-    {opened && <section style={P.panel} aria-label="Paperclip Voice" aria-live="polite">
+    {opened && <section id="paperclip-voice-dialog" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <h2 style={P.title}>Paperclip Voice</h2>
+        <h2 style={P.title}>Sprachmodus</h2>
         <button type="button" style={P.button} onClick={() => setOpened(false)} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>Lokales Whisper + Piper · Original-Paperclip-Chat · Windows / Linux</p>
+      <p style={P.muted}>Sprechen, automatisch senden und Antworten anhören. Zum Beenden auf „Stoppen“ drücken.</p>
       <p><strong>Status:</strong> {({ off: 'Aus', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
       <p style={P.muted}>Lokale Whisper- und Piper-Laufzeit</p>
       <label htmlFor="voice-language">Sprache</label>
