@@ -1,6 +1,6 @@
 {
   "name": "paperclip-plugin-voice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Local Whisper + Piper voice control of existing Paperclip chats and issues, for Windows and Linux.",
   "license": "MIT",
