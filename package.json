@@ -24,6 +24,7 @@
     "@paperclipai/plugin-sdk": "2026.1023.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.0",
     "typescript": "^5.9.0"
   }

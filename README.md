@@ -20,9 +20,11 @@ dictation button still allows editing before sending.
 
 ## Use
 
-Open an existing task and select **Sprachmodus für diesen Task** in its header.
-The task becomes the conversation target; press **Sprachmodus starten**. The
-global waveform button can also select the current task. Standalone agent chats
+Open an existing task or agent chat and select the waveform icon beside the
+composer microphone, then press **Sprachmodus starten**. The target is fixed to
+the open conversation. Navigating to a different page stops the session and
+releases its audio resources; already submitted messages remain in Paperclip.
+Standalone agent chats
 require Paperclip's Agent Chat feature. Starting an agent voice session checks
 this setting and attempts to enable it through the existing Paperclip API when
 needed. If the signed-in user lacks permission, the interface explains how an
@@ -39,6 +41,12 @@ screen locks. Microphone, Bluetooth, and end-to-end operation must be verified
 on the actual device; browser permission and autoplay policies vary.
 
 ## Install, update, rollback
+
+Paperclip currently has no composer plugin slot. The overlay attaches a plugin-owned
+control beside the existing dictation element using the current composer DOM.
+After Paperclip updates, check this integration: if the structure changes or
+multiple eligible composers are visible, the button may be unavailable.
+
 
 Build with Node 24: `npm install` and `npm run check`. Back up the Paperclip
 database, verify the target instance, then install the local plugin with an

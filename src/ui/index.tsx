@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
+import { useHostLocation, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
 import { routeTarget, vadDecision, voiceMessage, cleanSpokenText } from '../lib/voice-utils.mjs';
 import { transcribeLocal, speakLocal } from '../lib/local-audio.mjs';
-import { paperclipApi, ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
+import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
 type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
-type Agent = { id: string; name: string; status?: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
 
 const P: Record<string, CSSProperties> = {
-  toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 999, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', boxShadow: '0 4px 18px #0002', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   panel: { position: 'fixed', right: 16, bottom: 76, zIndex: 10050, maxWidth: 'calc(100vw - 32px)', width: 360, maxHeight: 'calc(100dvh - 105px)', overflowY: 'auto', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', padding: 18, boxShadow: '0 10px 30px #0003', fontFamily: 'inherit', fontSize: 14 },
   field: { display: 'block', width: '100%', marginTop: 6, marginBottom: 14, background: 'var(--background)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 10px', fontSize: 14 },
   button: { borderRadius: 8, padding: '9px 12px', background: 'var(--secondary)', color: 'var(--secondary-foreground)', border: '1px solid var(--border)', marginRight: 6, marginBottom: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
@@ -21,10 +20,6 @@ const P: Record<string, CSSProperties> = {
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function api<T>(path: string): Promise<T> {
-  return paperclipApi(path) as Promise<T>;
 }
 
 async function apiComments(issueId: string): Promise<Comment[]> {
@@ -63,11 +58,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const { pathname } = useHostLocation();
+  const [composerMount, setComposerMount] = useState<HTMLElement | null>(null);
+  const sessionPathRef = useRef<string | null>(null);
   const [target, setTargetState] = useState<Target | null>(null);
   const targetRef = useRef<Target | null>(null);
-  const explicitTarget = useRef(false);
-  const [issueId, setIssueId] = useState<string | null>(null);
   const [lastTranscript, setLastTranscript] = useState('');
   const [lastReply, setLastReply] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +91,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   const setPhase = (next: Phase) => { phaseRef.current = next; setPhaseState(next); };
   const setTarget = (next: Target | null) => { targetRef.current = next; setTargetState(next); };
-  const active = (epoch: number) => epoch === epochRef.current && streamRef.current !== null;
+  const active = (epoch: number) => epoch === epochRef.current && streamRef.current !== null && sessionPathRef.current === window.location.pathname;
 
   const teardown = useCallback(() => {
     epochRef.current += 1;
+    sessionPathRef.current = null;
     if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
     silenceIntervalRef.current = null;
     if (monitorIntervalRef.current) clearInterval(monitorIntervalRef.current);
@@ -124,37 +120,42 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     setPhaseState('off');
   }, []);
 
-  useEffect(() => () => teardown(), [teardown]);
-  useEffect(() => { teardown(); setIssueId(null); setTarget(null); }, [companyId, teardown]);
-
   useEffect(() => {
-    const openTask = (event: Event) => {
-      const detail = (event as CustomEvent<{ companyId?: string; issueId?: string }>).detail;
-      if (!detail || detail.companyId !== companyId || !detail.issueId) return;
-      setOpened(true);
-      if (phaseRef.current !== 'off' && phaseRef.current !== 'error') {
-        setError('Bitte den laufenden Sprachmodus stoppen, bevor du den Task wechselst.');
-        return;
+    window.addEventListener('pagehide', teardown);
+    return () => { window.removeEventListener('pagehide', teardown); teardown(); };
+  }, [teardown]);
+  useEffect(() => { teardown(); setTarget(routeTarget(window.location.pathname) as Target | null); }, [companyId, teardown]);
+
+  // The host has no composer plugin slot. Attach a plugin-owned portal next to
+  // the dictation control only when exactly one visible composer is present.
+  useEffect(() => {
+    let mount: HTMLElement | null = null;
+    const sync = () => {
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="task-chat-composer-actions"] [data-testid="local-dictation"]'))
+        .filter((node) => node.getClientRects().length > 0 && !node.closest('[role="dialog"]'));
+      const anchor = routeTarget(window.location.pathname) && candidates.length === 1 ? candidates[0] : null;
+      if (mount && (!anchor || mount.previousElementSibling !== anchor)) {
+        mount.remove(); mount = null; setComposerMount(null);
       }
-      explicitTarget.current = !opened;
-      setTarget({ kind: 'issue', ref: detail.issueId });
-      setError(null);
+      if (anchor && !mount && anchor.parentElement) {
+        mount = document.createElement('span');
+        mount.dataset.paperclipVoiceMount = 'true';
+        anchor.insertAdjacentElement('afterend', mount);
+        setComposerMount(mount);
+      }
     };
-    window.addEventListener('paperclip-voice-open-task', openTask);
-    return () => window.removeEventListener('paperclip-voice-open-task', openTask);
-  }, [companyId, opened]);
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    sync();
+    return () => { observer.disconnect(); mount?.remove(); setComposerMount(null); };
+  }, [pathname]);
 
-  useEffect(() => {
-    if (!opened || !companyId) return;
-    const inferred = routeTarget(window.location.pathname) as Target | null;
-    if (phaseRef.current === 'off' || phaseRef.current === 'error') {
-      if (explicitTarget.current) explicitTarget.current = false;
-      else setTarget(inferred);
-    }
-    void api<Agent[]>(`/companies/${encodeURIComponent(companyId)}/agents`)
-      .then((items) => setAgents(items.filter((agent) => agent.status !== 'terminated')))
-      .catch((cause) => setError(`Agenten konnten nicht geladen werden: ${friendlyError(cause)}`));
-  }, [opened, companyId]);
+  // useHostLocation follows Paperclip's SPA navigation, including browser back.
+  useLayoutEffect(() => {
+    teardown();
+    setOpened(false); setError(null); setLastTranscript(''); setLastReply('');
+    setTarget(routeTarget(pathname) as Target | null);
+  }, [pathname, teardown]);
 
   async function playAudio(result: ArrayBuffer, epoch: number): Promise<void> {
     if (!active(epoch) || !result.byteLength) return;
@@ -191,6 +192,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       await new Promise((resolve) => setTimeout(resolve, 1800));
       if (!active(epoch) || phaseRef.current !== 'waiting') return;
       const comments = await apiComments(issue);
+      if (!active(epoch)) return;
       const newReplies = comments.filter((comment) => !seenCommentIdsRef.current.has(comment.id) && isAgentReply(comment));
       for (const comment of comments) seenCommentIdsRef.current.add(comment.id);
       if (newReplies.length) {
@@ -219,7 +221,6 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const issue = activeIssueIdRef.current ?? await resolveIssue(companyId, selected);
     if (!active(epoch)) return;
     activeIssueIdRef.current = issue;
-    setIssueId(issue);
 
     // Establish a baseline BEFORE submitting; never read an old reply aloud.
     const before = await apiComments(issue);
@@ -354,7 +355,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   async function startSession(): Promise<void> {
     if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
-    if (!companyId || !targetRef.current) { setError('Wähle zunächst Alex, einen anderen Agenten oder eine Aufgabe.'); return; }
+    if (!companyId || !targetRef.current) { setError('Öffne zuerst einen Chat oder eine Aufgabe.'); return; }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
     teardown();
     setError(null);
@@ -362,17 +363,18 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     setLastTranscript('');
     setPhase('starting');
     const epoch = epochRef.current;
+    sessionPathRef.current = window.location.pathname;
     try {
       const ctx = new AudioContext();
       audioContextRef.current = ctx;
       await ctx.resume(); // unlock during the initial user gesture
       if (targetRef.current?.kind === 'chat') {
         await ensureAgentChatAvailable();
-        if (epoch !== epochRef.current) return;
+        if (epoch !== epochRef.current || sessionPathRef.current !== window.location.pathname) return;
       }
-      if (epoch !== epochRef.current) return;
+      if (epoch !== epochRef.current || sessionPathRef.current !== window.location.pathname) return;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (epoch !== epochRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
+      if (epoch !== epochRef.current || sessionPathRef.current !== window.location.pathname) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
@@ -380,24 +382,23 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       analyserRef.current = analyser;
       await startCapture(epoch);
     } catch (cause) {
-      if (epoch !== epochRef.current) return;
+      if (epoch !== epochRef.current || sessionPathRef.current !== window.location.pathname) return;
       teardown();
       setError(`Sprachmodus konnte nicht gestartet werden: ${friendlyError(cause)}`);
       setPhase('error');
     }
   }
 
-  const targetLabel = target ? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : agents.find(a => a.id === target.ref)?.name ?? target.ref) : 'Kein Ziel';
+  const targetLabel = target ? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : `Chat ${target.ref}`) : 'Kein Ziel';
   const canStart = phase === 'off' || phase === 'error';
 
   return <>
-    <style>{`@media (max-width: 767px) { .pc-voice-task-trigger { display: none !important; } .pc-voice-toggle { top: 64px !important; bottom: auto !important; right: 16px !important; } .pc-voice-panel { top: 120px !important; bottom: auto !important; max-height: calc(100dvh - 140px) !important; } }`}</style>
-    <button type="button" className="pc-voice-toggle" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
-      <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <style>{`.pc-voice-task-trigger { display: none !important; } @media (max-width: 767px) { .pc-voice-panel { top: 64px !important; bottom: auto !important; max-height: calc(100dvh - 84px) !important; } }`}</style>
+    {composerMount && target && createPortal(<button type="button" className="pc-voice-toggle" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: 0, borderRadius: 6, background: 'transparent', color: 'var(--muted-foreground)', cursor: 'pointer' }} aria-label="Sprachmodus" aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
         <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
       </svg>
-      <span>{phase !== 'off' && phase !== 'error' ? 'Sprachmodus aktiv' : 'Sprachmodus'}</span>
-    </button>
+    </button>, composerMount)}
     {opened && <section id="paperclip-voice-dialog" className="pc-voice-panel" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <h2 style={P.title}>Sprachmodus</h2>
@@ -409,18 +410,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <select id="voice-language" style={P.field} value={language} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
         <option value="de">Deutsch</option><option value="en">English</option>
       </select>
-      <label htmlFor="voice-target" style={{ display: 'block', marginTop: 8 }}>Zielkonversation</label>
-      <select id="voice-target" style={P.field} value={target ? `${target.kind}:${target.ref}` : ''} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => {
-        if (!event.target.value) return setTarget(null);
-        const [kind, ...rest] = event.target.value.split(':');
-        setTarget({ kind: kind as Target['kind'], ref: rest.join(':') });
-      }}>
-        <option value="">Agent wählen …</option>
-        {target?.kind === 'issue' && <option value={`issue:${target.ref}`}>Aktuelle Aufgabe {target.ref.slice(0, 8)}</option>}
-        {target?.kind === 'chat' && !agents.some(a => a.id === target.ref) && <option value={`chat:${target.ref}`}>Aktueller Chat: {target.ref}</option>}
-        {agents.map(a => <option key={a.id} value={`chat:${a.id}`}>{a.name}</option>)}
-      </select>
-      <p style={P.muted}>Aktiv: {targetLabel}{issueId ? <a style={{ color: 'var(--foreground)', marginLeft: 7, textDecoration: 'underline' }} href={`/issues/${encodeURIComponent(issueId)}`}>Chat öffnen</a> : null}</p>
+      <p style={P.muted}>Aktueller Chat: {targetLabel}</p>
       <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
       <summary style={{ cursor: 'pointer', padding: '5px 0' }}>Optionen</summary>
       <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={autoSend} onChange={(event) => { autoSendRef.current = event.target.checked; setAutoSend(event.target.checked); }} /> Automatisch an Paperclip senden</label>
