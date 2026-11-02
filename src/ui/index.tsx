@@ -10,12 +10,13 @@ type Agent = { id: string; name: string; status?: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
 
 const P: Record<string, CSSProperties> = {
-  toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, display: 'inline-flex', alignItems: 'center', gap: 9, padding: '11px 17px', borderRadius: 999, border: '1px solid #7186a9', background: '#172236', color: '#fff', boxShadow: '0 4px 20px #0005', fontWeight: 600, cursor: 'pointer' },
-  panel: { position: 'fixed', right: 16, bottom: 78, zIndex: 10050, maxWidth: 'calc(100vw - 32px)', width: 375, maxHeight: 'calc(100dvh - 105px)', overflowY: 'auto', borderRadius: 14, border: '1px solid #718096', background: '#152031', color: '#fff', padding: 16, boxShadow: '0 8px 40px #0009', fontFamily: 'system-ui, sans-serif', fontSize: 14 },
-  field: { display: 'block', width: '100%', marginTop: 6, marginBottom: 10, background: '#263750', color: '#fff', border: '1px solid #6b778d', borderRadius: 8, padding: 9, fontSize: 14 },
-  button: { borderRadius: 8, padding: '9px 12px', background: '#3a5a8b', color: 'white', border: '1px solid #8290a9', marginRight: 6, marginBottom: 6, cursor: 'pointer' },
-  muted: { opacity: 0.75, fontSize: 12, lineHeight: 1.5 },
-  title: { margin: '0 0 10px 0', fontSize: 18, fontWeight: 700 },
+  toggle: { position: 'fixed', right: 20, bottom: 20, zIndex: 10050, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 999, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', boxShadow: '0 4px 18px #0002', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  panel: { position: 'fixed', right: 16, bottom: 76, zIndex: 10050, maxWidth: 'calc(100vw - 32px)', width: 360, maxHeight: 'calc(100dvh - 105px)', overflowY: 'auto', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', padding: 18, boxShadow: '0 10px 30px #0003', fontFamily: 'inherit', fontSize: 14 },
+  field: { display: 'block', width: '100%', marginTop: 6, marginBottom: 14, background: 'var(--background)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 10px', fontSize: 14 },
+  button: { borderRadius: 8, padding: '9px 12px', background: 'var(--secondary)', color: 'var(--secondary-foreground)', border: '1px solid var(--border)', marginRight: 6, marginBottom: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' },
+  primary: { borderRadius: 8, padding: '10px 14px', background: 'var(--primary)', color: 'var(--primary-foreground)', border: '1px solid transparent', marginRight: 6, marginBottom: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  muted: { color: 'var(--muted-foreground)', fontSize: 12, lineHeight: 1.5 },
+  title: { margin: 0, fontSize: 16, fontWeight: 600 },
 };
 
 function friendlyError(error: unknown): string {
@@ -390,20 +391,20 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const canStart = phase === 'off' || phase === 'error';
 
   return <>
-    <button type="button" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
+    <style>{`@media (max-width: 767px) { .pc-voice-toggle { bottom: 80px !important; right: 16px !important; } .pc-voice-panel { bottom: 136px !important; max-height: calc(100dvh - 160px) !important; } }`}</style>
+    <button type="button" className="pc-voice-toggle" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
       <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
         <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
       </svg>
       <span>{phase !== 'off' && phase !== 'error' ? 'Sprachmodus aktiv' : 'Sprachmodus'}</span>
     </button>
-    {opened && <section id="paperclip-voice-dialog" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
+    {opened && <section id="paperclip-voice-dialog" className="pc-voice-panel" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <h2 style={P.title}>Sprachmodus</h2>
-        <button type="button" style={P.button} onClick={() => setOpened(false)} aria-label="Panel schließen">×</button>
+        <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => setOpened(false)} aria-label="Panel schließen">×</button>
       </header>
       <p style={P.muted}>Sprechen, automatisch senden und Antworten anhören. Zum Beenden auf „Stoppen“ drücken.</p>
-      <p><strong>Status:</strong> {({ off: 'Aus', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
-      <p style={P.muted}>Lokale Whisper- und Piper-Laufzeit</p>
+      <p style={{ ...P.muted, margin: '12px 0' }} role="status">{({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
       <label htmlFor="voice-language">Sprache</label>
       <select id="voice-language" style={P.field} value={language} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
         <option value="de">Deutsch</option><option value="en">English</option>
@@ -419,22 +420,25 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         {target?.kind === 'chat' && !agents.some(a => a.id === target.ref) && <option value={`chat:${target.ref}`}>Aktueller Chat: {target.ref}</option>}
         {agents.map(a => <option key={a.id} value={`chat:${a.id}`}>{a.name}</option>)}
       </select>
-      <p style={P.muted}>Aktiv: {targetLabel}{issueId ? <a style={{ color: '#c3dcff', marginLeft: 7 }} href={`/issues/${encodeURIComponent(issueId)}`}>Chat öffnen</a> : null}</p>
+      <p style={P.muted}>Aktiv: {targetLabel}{issueId ? <a style={{ color: 'var(--foreground)', marginLeft: 7, textDecoration: 'underline' }} href={`/issues/${encodeURIComponent(issueId)}`}>Chat öffnen</a> : null}</p>
+      <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
+      <summary style={{ cursor: 'pointer', padding: '5px 0' }}>Optionen</summary>
       <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={autoSend} onChange={(event) => { autoSendRef.current = event.target.checked; setAutoSend(event.target.checked); }} /> Automatisch an Paperclip senden</label>
       <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={autoContinue} onChange={(event) => { autoContinueRef.current = event.target.checked; setAutoContinue(event.target.checked); }} /> Nach Antwort weiter zuhören</label>
       <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={conciseReply} onChange={(event) => { conciseReplyRef.current = event.target.checked; setConciseReply(event.target.checked); }} /> Knappe Antworten anfordern (sichtbar im Chat)</label>
       <label style={P.muted} htmlFor="voice-threshold">Mikrofonempfindlichkeit (Auto-Stopp bei Sprechpause)</label>
       <input id="voice-threshold" type="range" min="0.015" max="0.09" step="0.005" value={silenceThreshold} onChange={(event) => { const n = Number(event.target.value); thresholdRef.current = n; setSilenceThreshold(n); }} style={{ width: '100%', margin: '4px 0 10px' }}/>
+      </details>
       <div>
-        {canStart ? <button type="button" style={P.button} onClick={() => void startSession()}>Sprachmodus starten</button> : null}
+        {canStart ? <button type="button" style={P.primary} onClick={() => void startSession()}>Sprachmodus starten</button> : null}
         {phase !== 'off' && <button type="button" style={P.button} onClick={() => { teardown(); setError(null); }}>Stoppen</button>}
         {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
         {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { setError(friendlyError(cause)); setPhase('error'); })}>Transkript absenden</button>}
       </div>
       {lastTranscript && <div style={{ marginTop: 12 }}><strong>Zuletzt verstanden</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
       {lastReply && <div style={{ marginTop: 10, maxHeight: 140, overflowY: 'auto' }}><strong>Letzte Antwort</strong><p style={{ ...P.muted, whiteSpace: 'pre-wrap' }}>{lastReply.slice(0, 1300)}{lastReply.length > 1300 ? ' …' : ''}</p></div>}
-      {error && <p role="alert" style={{ background: '#5c2631', padding: 8, borderRadius: 6, whiteSpace: 'pre-wrap' }}>{error}</p>}
-      <p style={{ ...P.muted, marginTop: 10 }}>Freigaben bleiben in Paperclip. Keine Audio-API-Kosten. Bei gesperrtem Smartphone kann der Browser Mikrofon und Audio pausieren.</p>
+      {error && <p role="alert" style={{ color: 'var(--destructive)', padding: '8px 0', whiteSpace: 'pre-wrap' }}>{error}</p>}
+      <p style={{ ...P.muted, marginTop: 10 }}>Auf dem Smartphone kann der Sprachmodus bei gesperrtem Bildschirm pausieren.</p>
     </section>}
   </>;
 }
