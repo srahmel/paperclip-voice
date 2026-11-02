@@ -1,6 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureNativeAgentChat, resolveNativeTask, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+
+test('agent chat prerequisite is enabled once and does not modify other settings', async () => {
+  const calls = [];
+  const fetcher = async (url, options) => {
+    calls.push({url, options});
+    return {ok:true, json:async () => ({enableAgentChat: calls.length > 1})};
+  };
+  assert.deepEqual(await ensureAgentChatAvailable(fetcher), {enabledNow:true});
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].options.method, 'PATCH');
+  assert.deepEqual(JSON.parse(calls[1].options.body), {enableAgentChat:true});
+  assert.equal(calls[1].options.credentials, 'include');
+  let count=0;
+  assert.deepEqual(await ensureAgentChatAvailable(async () => { count++; return {ok:true, json:async () => ({enableAgentChat:true})}; }), {enabledNow:false});
+  assert.equal(count, 1);
+});
+
+test('missing administrator rights are explained without repeated writes', async () => {
+  let count=0;
+  await assert.rejects(ensureAgentChatAvailable(async () => ++count === 1
+    ? {ok:true, json:async () => ({enableAgentChat:false})}
+    : {ok:false, status:403}), /Administrator/);
+  assert.equal(count, 2);
+});
+
+test('an unconfirmed activation is reported instead of starting blindly', async () => {
+  await assert.rejects(ensureAgentChatAvailable(async () => ({ok:true, json:async () => ({enableAgentChat:false})})), /nicht aktiviert/);
+});
 
 test('task references resolve to the correct accessible company issue', async () => {
   let calls = 0;

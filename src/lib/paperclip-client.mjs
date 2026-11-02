@@ -32,6 +32,27 @@ export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch
   return issue.id;
 }
 
+// A user's explicit start of an agent voice conversation may enable the one
+// Paperclip feature it requires. The server enforces instance-admin access.
+export async function ensureAgentChatAvailable(doFetch = fetch) {
+  const path = '/api/instance/settings/experimental';
+  const options = { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000) };
+  let response;
+  try { response = await doFetch(path, options); }
+  catch { throw new Error('Paperclip-Einstellungen sind nicht erreichbar. Bitte Verbindung prüfen.'); }
+  if (!response.ok) throw new Error('Agent-Chat-Einstellung konnte nicht geprüft werden. Bitte Anmeldung und Berechtigung prüfen.');
+  const before = await response.json();
+  if (before.enableAgentChat === true) return { enabledNow: false };
+  try {
+    response = await doFetch(path, { ...options, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enableAgentChat: true }), signal: AbortSignal.timeout(10000) });
+  } catch { throw new Error('Agenten-Chat konnte nicht automatisch eingeschaltet werden. Bitte Verbindung prüfen.'); }
+  if (response.status === 403 || response.status === 401) throw new Error('Agenten-Chat ist deaktiviert. Ein Paperclip-Administrator muss ihn unter Einstellungen → Experimental → Agent Chat einschalten.');
+  if (!response.ok) throw new Error('Agenten-Chat konnte nicht automatisch eingeschaltet werden. Bitte Paperclip-Einstellungen prüfen.');
+  const after = await response.json();
+  if (after.enableAgentChat !== true) throw new Error('Paperclip hat Agenten-Chat nicht aktiviert. Bitte Instanzeinstellungen prüfen.');
+  return { enabledNow: true };
+}
+
 export async function resolveNativeTask(companyId, reference, doFetch = fetch) {
   if (!companyId || !reference) throw new Error('Task fehlt.');
   const issue = await paperclipApi(`/issues/${encodeURIComponent(reference)}`, { doFetch });

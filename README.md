@@ -23,7 +23,10 @@ dictation button still allows editing before sending.
 Open an existing task and select **Sprachmodus für diesen Task** in its header.
 The task becomes the conversation target; press **Sprachmodus starten**. The
 global waveform button can also select the current task. Standalone agent chats
-require Paperclip's Agent Chat feature; when it is disabled, choose a task instead.
+require Paperclip's Agent Chat feature. Starting an agent voice session checks
+this setting and attempts to enable it through the existing Paperclip API when
+needed. If the signed-in user lacks permission, the interface explains how an
+administrator can enable it; task conversations remain available.
 Allow microphone access. When you finish speaking, pause; the message
 is sent automatically. The agent's reply is read aloud and listening resumes.
 The short-answer request is visible in each submitted voice message. **Stoppen**

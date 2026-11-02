@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
 import { routeTarget, vadDecision, voiceMessage, cleanSpokenText } from '../lib/voice-utils.mjs';
 import { transcribeLocal, speakLocal } from '../lib/local-audio.mjs';
-import { paperclipApi, ensureNativeAgentChat, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
+import { paperclipApi, ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
 type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
@@ -366,9 +366,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       audioContextRef.current = ctx;
       await ctx.resume(); // unlock during the initial user gesture
       if (targetRef.current?.kind === 'chat') {
-        const settings = await api<{ enableAgentChat?: boolean }>('/instance/settings/experimental');
+        await ensureAgentChatAvailable();
         if (epoch !== epochRef.current) return;
-        if (!settings.enableAgentChat) throw new Error('Agenten-Chats sind in Paperclip deaktiviert. Öffne einen Task und wähle dort „Sprachmodus für diesen Task“.');
       }
       if (epoch !== epochRef.current) return;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });

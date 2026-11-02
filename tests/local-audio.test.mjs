@@ -30,3 +30,8 @@ test('speech uses authenticated local endpoint and handles failure', async () =>
   assert.deepEqual(JSON.parse(request.options.body), {text: 'Hallo', language: 'de'});
   await assert.rejects(speakLocal('c', 'Hallo', 'de', async () => ({ok:false})), /Sprachausgabe/);
 });
+
+test('missing route and authorization failures give actionable errors', async () => {
+  await assert.rejects(transcribeLocal('c', new Blob(['x']), 'de', async () => ({ok:false, status:404})), /Endpunkt fehlt/);
+  await assert.rejects(speakLocal('c', 'Hallo', 'de', async () => ({ok:false, status:403})), /Berechtigung/);
+});
