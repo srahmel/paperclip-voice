@@ -48,7 +48,7 @@ function isAgentReply(comment: Comment): boolean {
 
 export function TaskVoiceButton({ context }: PluginWidgetProps) {
   if (!context.companyId || !context.entityId) return null;
-  return <button type="button" title="Sprachmodus für diesen Task öffnen" onClick={() => {
+  return <button type="button" className="pc-voice-task-trigger" title="Sprachmodus für diesen Task öffnen" onClick={() => {
     window.dispatchEvent(new CustomEvent('paperclip-voice-open-task', { detail: { companyId: context.companyId, issueId: context.entityId } }));
   }} style={{ ...P.button, margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
     <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -391,7 +391,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const canStart = phase === 'off' || phase === 'error';
 
   return <>
-    <style>{`@media (max-width: 767px) { .pc-voice-toggle { bottom: 80px !important; right: 16px !important; } .pc-voice-panel { bottom: 136px !important; max-height: calc(100dvh - 160px) !important; } }`}</style>
+    <style>{`body:has(.pc-voice-task-trigger) .pc-voice-toggle { display: none !important; } @media (max-width: 767px) { .pc-voice-toggle { top: 100px !important; bottom: auto !important; right: 16px !important; } .pc-voice-panel { top: 156px !important; bottom: auto !important; max-height: calc(100dvh - 176px) !important; } }`}</style>
     <button type="button" className="pc-voice-toggle" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
       <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
         <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
