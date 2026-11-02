@@ -391,7 +391,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const canStart = phase === 'off' || phase === 'error';
 
   return <>
-    <style>{`body:has(.pc-voice-task-trigger) .pc-voice-toggle { display: none !important; } @media (max-width: 767px) { .pc-voice-toggle { top: 100px !important; bottom: auto !important; right: 16px !important; } .pc-voice-panel { top: 156px !important; bottom: auto !important; max-height: calc(100dvh - 176px) !important; } }`}</style>
+    <style>{`@media (max-width: 767px) { .pc-voice-task-trigger { display: none !important; } .pc-voice-toggle { top: 64px !important; bottom: auto !important; right: 16px !important; } .pc-voice-panel { top: 120px !important; bottom: auto !important; max-height: calc(100dvh - 140px) !important; } }`}</style>
     <button type="button" className="pc-voice-toggle" style={P.toggle} aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
       <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
         <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
