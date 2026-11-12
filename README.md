@@ -21,18 +21,20 @@ dictation button still allows editing before sending.
 ## Use
 
 Open an existing task or agent chat and select the waveform icon beside the
-composer microphone, then press **Sprachmodus starten**. The target is fixed to
+composer microphone, then press **Start voice mode**. Controls follow the host
+document language and theme; speech language is selected separately. The target is fixed to
 the open conversation. Navigating to a different page stops the session and
 releases its audio resources; already submitted messages remain in Paperclip.
 Standalone agent chats
 require Paperclip's Agent Chat feature. Starting an agent voice session checks
-this setting and attempts to enable it through the existing Paperclip API when
-needed. If the signed-in user lacks permission, the interface explains how an
-administrator can enable it; task conversations remain available.
+this setting without changing it. If disabled, the interface explains how an
+authorized administrator can enable it; task conversations remain available.
+Voice startup only reads an existing chat; open one in the host first.
 Allow microphone access. When you finish speaking, pause; the message
 is sent automatically. The agent's reply is read aloud and listening resumes.
-The short-answer request is visible in each submitted voice message. **Stoppen**
+The short-answer request is visible in each submitted voice message. **Stop**
 releases the microphone. The panel can also disable automatic sending.
+Closing the panel keeps voice mode active; reopen it to return to the controls.
 
 Voice recognition can misinterpret background noise or words, and submitted
 messages can trigger normal agent work. Test in a quiet place and while parked.
@@ -69,3 +71,10 @@ in the chat.
 `npm run check` runs the unit tests, TypeScript check, and plugin build. The
 previous experimental Voicebox client and its tests remain in the repository for
 reference, but the active plugin UI does not depend on Voicebox or Docker.
+
+The optional Companion integration publishes tab-local, context-bound
+[voice state v1](docs/VOICE_STATE_V1.md), including actual reply-audio energy and
+snapshot requests. It adds no transcript or audio payload. See the
+[development pilot](docs/COMPANION_PILOT.md) for synthetic browser reproduction,
+review/install boundaries and remaining device checks, and the
+[continuity contract](docs/CONVERSATION_CONTINUITY.md) for source-backed agreements.

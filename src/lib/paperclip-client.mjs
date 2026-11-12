@@ -32,8 +32,7 @@ export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch
   return issue.id;
 }
 
-// A user's explicit start of an agent voice conversation may enable the one
-// Paperclip feature it requires. The server enforces instance-admin access.
+// Starting voice is not permission to change a host-wide experimental setting.
 export async function ensureAgentChatAvailable(doFetch = fetch) {
   const path = '/api/instance/settings/experimental';
   const options = { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000) };
@@ -41,16 +40,21 @@ export async function ensureAgentChatAvailable(doFetch = fetch) {
   try { response = await doFetch(path, options); }
   catch { throw new Error('Paperclip-Einstellungen sind nicht erreichbar. Bitte Verbindung prüfen.'); }
   if (!response.ok) throw new Error('Agent-Chat-Einstellung konnte nicht geprüft werden. Bitte Anmeldung und Berechtigung prüfen.');
-  const before = await response.json();
-  if (before.enableAgentChat === true) return { enabledNow: false };
-  try {
-    response = await doFetch(path, { ...options, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enableAgentChat: true }), signal: AbortSignal.timeout(10000) });
-  } catch { throw new Error('Agenten-Chat konnte nicht automatisch eingeschaltet werden. Bitte Verbindung prüfen.'); }
-  if (response.status === 403 || response.status === 401) throw new Error('Agenten-Chat ist deaktiviert. Ein Paperclip-Administrator muss ihn unter Einstellungen → Experimental → Agent Chat einschalten.');
-  if (!response.ok) throw new Error('Agenten-Chat konnte nicht automatisch eingeschaltet werden. Bitte Paperclip-Einstellungen prüfen.');
-  const after = await response.json();
-  if (after.enableAgentChat !== true) throw new Error('Paperclip hat Agenten-Chat nicht aktiviert. Bitte Instanzeinstellungen prüfen.');
-  return { enabledNow: true };
+  const settings = await response.json();
+  if (settings.enableAgentChat !== true) throw new Error('Agenten-Chat ist deaktiviert. Ein Paperclip-Administrator muss ihn unter Einstellungen → Experimental → Agent Chat einschalten.');
+  return { enabledNow: false };
+}
+
+/** Resolve canonical IDs without creating a chat or treating a route slug as an ID. */
+export async function readNativeVoiceContext(companyId, target, doFetch = fetch) {
+  if (!companyId || !target?.ref || !['chat', 'issue'].includes(target.kind)) throw new Error('Invalid voice target');
+  const path = target.kind === 'chat'
+    ? `/companies/${encodeURIComponent(companyId)}/chats/${encodeURIComponent(target.ref)}`
+    : `/issues/${encodeURIComponent(target.ref)}`;
+  const issue = await paperclipApi(path, { doFetch });
+  if (!issue?.id || issue.companyId !== companyId) throw new Error('Öffne zuerst ein bestehendes Gespräch in dieser Organisation.');
+  // A task assignee is not necessarily the author of its next spoken comment.
+  return { companyId, conversationId: issue.id, agentId: issue.conversationAgentId ?? null };
 }
 
 export async function resolveNativeTask(companyId, reference, doFetch = fetch) {

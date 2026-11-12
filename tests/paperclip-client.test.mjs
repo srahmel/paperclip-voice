@@ -1,33 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeVoiceContext, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
 
-test('agent chat prerequisite is enabled once and does not modify other settings', async () => {
+test('agent chat prerequisite is read-only and never activates host settings', async () => {
   const calls = [];
   const fetcher = async (url, options) => {
     calls.push({url, options});
-    return {ok:true, json:async () => ({enableAgentChat: calls.length > 1})};
+    assert.equal(options.method, undefined);
+    return {ok:true, json:async () => ({enableAgentChat: true})};
   };
-  assert.deepEqual(await ensureAgentChatAvailable(fetcher), {enabledNow:true});
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].options.method, 'PATCH');
-  assert.deepEqual(JSON.parse(calls[1].options.body), {enableAgentChat:true});
-  assert.equal(calls[1].options.credentials, 'include');
+  assert.deepEqual(await ensureAgentChatAvailable(fetcher), {enabledNow:false});
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.credentials, 'include');
   let count=0;
   assert.deepEqual(await ensureAgentChatAvailable(async () => { count++; return {ok:true, json:async () => ({enableAgentChat:true})}; }), {enabledNow:false});
   assert.equal(count, 1);
 });
 
-test('missing administrator rights are explained without repeated writes', async () => {
+test('disabled agent chat is explained without writes', async () => {
   let count=0;
   await assert.rejects(ensureAgentChatAvailable(async () => ++count === 1
     ? {ok:true, json:async () => ({enableAgentChat:false})}
     : {ok:false, status:403}), /Administrator/);
-  assert.equal(count, 2);
+  assert.equal(count, 1);
 });
 
-test('an unconfirmed activation is reported instead of starting blindly', async () => {
-  await assert.rejects(ensureAgentChatAvailable(async () => ({ok:true, json:async () => ({enableAgentChat:false})})), /nicht aktiviert/);
+test('unreadable host settings are reported instead of starting blindly', async () => {
+  await assert.rejects(ensureAgentChatAvailable(async () => ({ok:false, status:403})), /Berechtigung/);
+});
+
+test('voice bridge context uses canonical IDs from read-only native chat/task routes', async () => {
+  const calls = [];
+  const doFetch = async (url, options) => {
+    calls.push(url);
+    assert.equal(options.method, 'GET');
+    return {ok:true, json:async () => ({id:'canonical-issue', companyId:'company', conversationAgentId:'canonical-agent'})};
+  };
+  const expected = {companyId:'company', conversationId:'canonical-issue', agentId:'canonical-agent'};
+  assert.deepEqual(await readNativeVoiceContext('company', {kind:'chat', ref:'friendly-slug'}, doFetch), expected);
+  assert.deepEqual(await readNativeVoiceContext('company', {kind:'issue', ref:'EX-1'}, doFetch), expected);
+  assert.deepEqual(calls, ['/api/companies/company/chats/friendly-slug', '/api/issues/EX-1']);
+  await assert.rejects(readNativeVoiceContext('other', {kind:'issue', ref:'EX-1'}, doFetch), /Organisation/);
+  await assert.rejects(readNativeVoiceContext('company', {kind:'chat', ref:'missing'}, async () => ({ok:true, json:async () => null})), /bestehendes/);
+  assert.deepEqual(await readNativeVoiceContext('company', {kind:'issue', ref:'EX-2'}, async () => ({ok:true, json:async () => ({id:'task', companyId:'company', assigneeAgentId:'not-necessarily-the-speaker'})})), {companyId:'company', conversationId:'task', agentId:null});
 });
 
 test('task references resolve to the correct accessible company issue', async () => {
