@@ -1,6 +1,6 @@
 import { decodeBase64Audio, extensionForMime, normaliseAudioMime, cleanSpokenText } from './voice-utils.mjs';
 
-export async function transcribeWithVoicebox({ baseUrl, language, audioBase64, mimeType, timeoutMs = 45000, doFetch = fetch }) {
+export async function transcribeWithVoicebox({ baseUrl, language, audioBase64, mimeType, timeoutMs = 45000, signal, doFetch = fetch }) {
   const mime = normaliseAudioMime(mimeType);
   const bytes = decodeBase64Audio(audioBase64);
   const form = new FormData();
@@ -8,7 +8,7 @@ export async function transcribeWithVoicebox({ baseUrl, language, audioBase64, m
   form.set('model', 'stt');
   form.set('language', language);
   const res = await doFetch(`${baseUrl}/v1/audio/transcriptions`, {
-    method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs),
+    method: 'POST', body: form, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Local STT returned HTTP ${res.status}`);
   const json = await res.json();
@@ -17,14 +17,14 @@ export async function transcribeWithVoicebox({ baseUrl, language, audioBase64, m
   return text;
 }
 
-export async function synthesizeWithVoicebox({ baseUrl, voice, speechRate, text, timeoutMs = 45000, doFetch = fetch }) {
+export async function synthesizeWithVoicebox({ baseUrl, voice, speechRate, text, timeoutMs = 45000, signal, doFetch = fetch }) {
   const safeText = String(text ?? '');
   if (!safeText || safeText.length > 2500) throw new Error('Invalid TTS text');
   const res = await doFetch(`${baseUrl}/v1/audio/speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'tts', input: safeText, voice, speed: speechRate, response_format: 'wav' }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Local TTS returned HTTP ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());

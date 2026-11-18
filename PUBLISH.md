@@ -1,29 +1,17 @@
-# Publish as a public GitHub repository
+# Distribution
 
-This source tree is **prepared for public release**, but a GitHub repository is **not** created automatically by this archive. A repository owner with permission to create repositories must perform the publication.
+Version 0.2 is a plugin-only migration. The repository is currently private for
+npm publication (`private: true`); GitHub source publication is separate.
 
-## Security check (mandatory)
+Before an install or release:
 
-- [ ] Confirm no proprietary paths, prompts, user/customer information, API keys, recordings, or agent workspaces are in the files.
-- [ ] Review `SECURITY.md`, `THIRD_PARTY.md` and the third-party model license notices.
-- [ ] Run `npm install && npm run check` on Node.js 24.11+.
-- [ ] Validate whether the intended Paperclip host supports the installed plugin SDK and `appShellOverlay` slot.
-- [ ] Decide whether to publish the alpha immediately or keep a private development branch until E2E verification.
+1. Run tests, typecheck and build in the existing repository.
+2. Use PAPERCLIP_PLUGIN_OUTDIR=.cache/build for a non-deploying check.
+3. Inspect the package file list. Include Python workers; exclude recordings,
+   models, credentials, runtime data and archived core patches.
+4. Verify public task/global toolbar and overlay slots, authenticated actions,
+   local runtime configuration and cancellation on the target host.
+5. Record remaining physical microphone/mobile checks honestly.
 
-## Create public repository with GitHub CLI
-
-From the extracted directory (replace the destination account as needed):
-
-```bash
-git init -b main
-git add .
-git commit -m "feat: initial Paperclip Voice alpha plugin"
-gh auth login                 # only if not already authenticated
-gh repo create paperclip-voice --public --source=. --remote=origin --push
-```
-
-The repo must be **public**. The `"private": true` npm field prevents accidental **npm publication**, not GitHub visibility.
-
-Then: open GitHub → Actions; run checks; test the acceptance checklist on both Windows and Linux; add repository topics `paperclip`, `voice`, `whisper`, `piper`, `typescript`, `open-source`.
-
-Do not publish a pre-built GPL-containing Docker image until redistribution requirements have been reviewed. The source Dockerfile is a local build recipe.
+No npm publish is part of the current migration. Existing models and Python
+runtimes keep their own licenses and are not embedded in the npm package.

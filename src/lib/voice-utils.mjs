@@ -3,6 +3,7 @@ export const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 export const MAX_AUDIO_BASE64_CHARS = Math.ceil(MAX_AUDIO_BYTES / 3) * 4 + 4;
 export const ALLOWED_AUDIO_MIMES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav', 'audio/x-wav'];
 const DEFAULTS = Object.freeze({
+  backend: 'python',
   voiceboxUrl: 'http://127.0.0.1:8790',
   language: 'de',
   voice: 'de_DE-thorsten-medium',
@@ -26,6 +27,8 @@ export function assertLocalVoiceboxUrl(value) {
 
 export function parseConfig(raw = {}) {
   const config = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
+  if (!['python', 'voicebox'].includes(config.backend)) throw new Error('Invalid audio backend');
+  for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
   config.voiceboxUrl = assertLocalVoiceboxUrl(config.voiceboxUrl);
   if (!['de', 'en'].includes(config.language)) throw new Error('language must be de or en');
   if (!/^[a-z]{2}_[A-Z]{2}-[a-zA-Z0-9_-]{2,80}$/.test(config.voice)) throw new Error('Invalid Piper voice identifier');

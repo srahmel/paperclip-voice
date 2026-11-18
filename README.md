@@ -1,71 +1,82 @@
 # Paperclip Voice
 
-Local speech input and output for existing Paperclip agent chats. The optional
-voice-dialog plugin detects a pause, transcribes with local faster-whisper,
-sends a normal Paperclip comment, reads an agent reply with local Piper, and
-listens again. Text and normal permissions remain in Paperclip. The normal
-dictation button still allows editing before sending.
-
-## Requirements
-
-- A compatible Paperclip installation with the authenticated local audio routes
-  provided by the patches in `dictation/`.
-- The local faster-whisper and Piper environments and models. The repair task
-  described in `dictation/ensure-voice-runtime.ps1` restores missing runtime
-  components. No cloud API key or separate Voicebox service is required.
-- A browser with MediaRecorder, Web Audio and microphone access on HTTPS or
-  localhost. Chrome and Edge are the primary targets.
-- A Paperclip version supporting the `appShellOverlay` plugin slot. On Windows,
-  the Paperclip plugin loader may require the accompanying Windows loader patch.
+Local Whisper transcription and Piper speech for existing Paperclip tasks and
+agent chats. Version 0.2 uses the public plugin action bridge, task toolbar,
+global toolbar and app overlay. No Paperclip core patch or private composer
+DOM structure is required.
 
 ## Use
 
-Open an existing task or agent chat and select the waveform icon beside the
-composer microphone, then press **Sprachmodus starten**. The target is fixed to
-the open conversation. Navigating to a different page stops the session and
-releases its audio resources; already submitted messages remain in Paperclip.
-Standalone agent chats
-require Paperclip's Agent Chat feature. Starting an agent voice session checks
-this setting and attempts to enable it through the existing Paperclip API when
-needed. If the signed-in user lacks permission, the interface explains how an
-administrator can enable it; task conversations remain available.
-Allow microphone access. When you finish speaking, pause; the message
-is sent automatically. The agent's reply is read aloud and listening resumes.
-The short-answer request is visible in each submitted voice message. **Stoppen**
-releases the microphone. The panel can also disable automatic sending.
+Open a task or existing agent chat and select **Sprachmodus** in the toolbar.
+The panel is bound to that conversation. Navigating away stops recording and
+playback. Closing the panel, stopping or disabling the plugin releases audio
+resources and cancels pending audio jobs.
 
-Voice recognition can misinterpret background noise or words, and submitted
-messages can trigger normal agent work. Test in a quiet place and while parked.
-Mobile browsers may pause recording or playback in the background or when the
-screen locks. Microphone, Bluetooth, and end-to-end operation must be verified
-on the actual device; browser permission and autoplay policies vary.
+- Start the microphone, speak, then pause. By default, review and edit the text
+  before selecting **Transkript absenden**.
+- Enable automatic submission only for a continuing voice conversation.
+- The concise-answer instruction stays visible in each submitted comment.
+- Existing agent answers stay in Paperclip and can be spoken with local Piper.
+- Under **Optionen**, import a recording for transcription and text review.
+  Imported recordings are never submitted automatically.
+- Agent conversations require Paperclip's Agent Chat setting. Normal task/chat
+  authorization applies. A submitted comment can wake its assigned agent.
 
-## Install, update, rollback
+The native Paperclip composer and gallery are not modified. Microphone access
+requires HTTPS or localhost and a compatible browser. A suspended or locked
+mobile browser can interrupt audio.
 
-Paperclip currently has no composer plugin slot. The overlay attaches a plugin-owned
-control beside the existing dictation element using the current composer DOM.
-After Paperclip updates, check this integration: if the structure changes or
-multiple eligible composers are visible, the button may be unavailable.
+## Local audio engine
 
+The default `python` backend reuses installed faster-whisper and Piper runtimes.
+The plugin owns the Python workers under `dictation/`. They receive pipe input,
+run offline with bounded output and timeouts, and have no network listener.
+Audio and transcripts are not written to logs.
 
-Build with Node 24: `npm install` and `npm run check`. Back up the Paperclip
-database, verify the target instance, then install the local plugin with an
-authorized Paperclip administrator using `paperclipai plugin install --local
-<absolute-path-to-repository>`. Use the Paperclip plugin manager to disable or
-uninstall the plugin; the native dictation and speech patches remain separate.
-Record and reapply the native Paperclip patches after upstream updates only after
-reviewing compatibility. The Windows loader patch and installation notes are
-also maintained in the private Paperclip configuration backup.
+Configure these company-scoped plugin settings. The host filters plugin process
+environments, so host-level settings alone may not be visible. Environment
+fallbacks apply only when explicitly supplied to the plugin worker:
 
-The UI communicates with authenticated same-origin Paperclip endpoints; audio
-is processed locally, not intentionally logged or persisted. Conversations are
-stored as normal Paperclip text comments. The browser session's existing access
-rights and Paperclip approvals remain in force. A failed or ambiguous submission
-is not retried automatically. Spoken replies are shortened; full details remain
-in the chat.
+| Plugin setting | Host environment fallback |
+| --- | --- |
+| `sttPython` | `PAPERCLIP_VOICE_PYTHON` |
+| `sttModelDir` | `PAPERCLIP_VOICE_MODEL` |
+| `ttsPython` | `PAPERCLIP_TTS_PYTHON` |
+| `ttsModelDir` | `PAPERCLIP_TTS_MODEL_DIR` |
+| `windowsSystemRoot` | `SystemRoot` / `WINDIR` |
 
-## Development
+Existing Windows setup helpers are in `dictation/`. Model/Python installation is
+an explicit deployment step. Opening Voice does not download models. Whisper,
+Piper and voices retain their separate licenses.
 
-`npm run check` runs the unit tests, TypeScript check, and plugin build. The
-previous experimental Voicebox client and its tests remain in the repository for
-reference, but the active plugin UI does not depend on Voicebox or Docker.
+The optional `voicebox` backend supports an existing loopback service. The old
+Docker recipe is not a prerequisite: its upstream image rejected anonymous
+pulling during migration and is not a verified installation path.
+
+## Build and install
+
+Use Node.js 24.11+ in the existing plugin checkout:
+
+```sh
+npm test
+npm run typecheck
+npm run build
+paperclipai plugin target
+paperclipai plugin install --local /absolute/path/to/paperclip-voice
+```
+
+For verification without replacing an installed `dist`, set
+`PAPERCLIP_PLUGIN_OUTDIR=.cache/build` before `npm run build`. The build refuses
+output outside the project. Use the normal `dist` for installation.
+Plugin ID: `paperclip-plugin-voice`.
+
+Do not apply legacy audio/core patches. Plugin actions handle audio jobs;
+ordinary Paperclip APIs handle comments. Disable/uninstall through Plugin Manager.
+Existing conversations, attachments and model installations remain.
+
+## Verification
+
+See [the verification record](docs/VERIFICATION.md) and
+[acceptance checklist](docs/ACCEPTANCE.md). A build or synthetic speech roundtrip
+does not prove microphone capture, human speech quality, Bluetooth or mobile
+background operation.

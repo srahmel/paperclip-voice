@@ -1,6 +1,6 @@
 {
   "name": "paperclip-plugin-voice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Local Whisper + Piper voice control of existing Paperclip chats and issues, for Windows and Linux.",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "worker": "./dist/worker.js",
     "ui": "./dist/ui/"
   },
-  "files": ["dist", "README.md", "LICENSE", "docs"],
+  "files": ["dist", "README.md", "LICENSE", "docs", "dictation/transcribe.py", "dictation/synthesize.py", "dictation/requirements.txt", "dictation/requirements-tts.txt"],
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test tests/*.test.mjs",

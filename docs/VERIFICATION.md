@@ -1,28 +1,40 @@
-# Verification log — 1 November 2026
+# Plugin migration verification — 18 November 2026
 
-## Passed in the development container
+## Completed before live activation
 
-- **18 / 18** Node.js isolated tests for local speech API shapes, security limits, normal Paperclip issue/chat API requests, comment submission idempotency semantics, VAD rules and text cleanup.
-- TypeScript/TSX syntax parsed with the TypeScript compiler frontend for `src/manifest.ts`, `src/worker.ts` and `src/ui/index.tsx` (no parse diagnostics).
-- Public source-content scan: no known proprietary project names, personal IDs, business domains, local operator paths, secrets or voice recordings.
+- Image plugin: TypeScript, 32 tests and isolated output build passed. Its synthetic
+  browser preview selected an attachment, zoomed from 53 to 66 percent, drew a
+  mark and saved annotated feedback through the simulated native attachment and
+  comment APIs. This is not a real-task or stock-host installation proof.
+- Voice plugin: 33 Node tests, TypeScript and isolated output build passed after
+  merging the existing standalone backend with the local task-aware UI.
+- New subprocess tests exercise real pipe I/O, environment filtering, output
+  bounds, timeout and cancellation. Worker tests reject another company/user,
+  agent invocation, unauthorized job polling/cancellation, and stale shutdown jobs.
+- Native Windows / Node 24.22.1: plugin-owned Python code generated a 167468-byte
+  WAV with the installed German Piper voice, then transcribed it with the
+  installed offline faster-whisper model. Most of the synthetic phrase was
+  correct; the word Plugin was recognized as Klugchen. This is not a speech
+  accuracy or microphone acceptance result.
 
-## Verified in published GitHub Actions (1 November 2026)
+## Failed attempts and changes
 
-- [Windows and Linux CI run](https://github.com/srahmel/paperclip-voice/actions/runs/41299789278): **both jobs passed** for source commit `f37e79f4d1a959125cec059dea887c9bb6fcf9d7`.
-- Each job completed `npm install`, 18 Node.js unit tests, `tsc --noEmit`, and the esbuild plugin build using Node.js 24.
-- These are **build and isolated-test** passes, not evidence that a real Paperclip browser/microphone/Voicebox setup works end to end.
+- The inherited Voicebox Docker build failed: its configured GHCR image rejected
+  anonymous token retrieval with HTTP 401. No container/service was started.
+  Default audio now reuses existing local Python runtimes from the plugin worker.
+- Initial merge conflicts in the UI imports/status text and README were resolved
+  around public plugin actions, official toolbar slots and no composer DOM mount.
+- Typecheck initially caught incomplete request types and cancellation options;
+  those were corrected before the passing check.
+- The host deliberately filters plugin environments. Native Python/SystemRoot
+  and model locations therefore need explicit company plugin configuration.
 
-## Not run / cannot claim
+## Still requires live proof
 
-- **Full dependency install on the original development container**: npm registry DNS egress was unavailable there (`EAI_AGAIN registry.npmjs.org`); equivalent checks have since passed on GitHub Actions.
-- **Docker image build**: Docker engine is not installed in the development container.
-- **Real Paperclip plugin registration / end-to-end**: No access to the local running Paperclip instance, microphone or signed-in browser.
-- **Windows / Linux runtime verification**: CI matrix has been prepared, but no runs have executed yet.
-- **Mobile lock-screen usability**: unverified and not promised.
-
-## Source review notes
-
-- Manifest now includes `issue.comments.read`, needed for both speaking and monitoring the original Paperclip comments.
-- Voicebox's default English-only STT must be replaced by a multilingual model at image-build time.
-- The default German TTS voice is baked into the local image, not retrieved by the browser.
-- Native Paperclip calls use authenticated standard endpoints; plugin-created LLM sessions are intentionally absent.
+- Reloaded plugins and authorized configuration on the actual Paperclip host.
+- Imported recording through the real authenticated plugin action bridge.
+- Physical microphone, playback and full voice conversation with a human.
+- Standalone image entry and editor after removal of the native gallery patch.
+- Controlled removal of the old feature patches, host UI build, health and
+  endpoint absence checks. No stock-host or Linux acceptance is claimed here.
+- Mobile, Bluetooth and background recording remain device-specific checks.

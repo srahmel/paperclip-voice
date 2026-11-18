@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import re
 import sys
 import wave
 from pathlib import Path
@@ -17,15 +18,25 @@ def main():
     text, language = request["text"], request["language"]
     if not isinstance(text, str) or not text.strip() or len(text) > 4000 or language not in MODELS:
         raise ValueError("invalid request")
-    model = Path(os.environ["PAPERCLIP_TTS_MODEL_DIR"]) / MODELS[language]
+    voice_id = request.get("voice")
+    speed = request.get("speed", 1.0)
+    if not isinstance(speed, (int, float)) or not 0.7 <= speed <= 1.5:
+        raise ValueError("invalid speed")
+    model_relative = MODELS[language]
+    if voice_id:
+        match = re.fullmatch(r"([a-z]{2})_([A-Z]{2})-([a-zA-Z0-9_]+)-(low|medium|high|x_low)", voice_id)
+        if not match or match[1] != language:
+            raise ValueError("invalid voice")
+        model_relative = f"{match[1]}/{match[1]}_{match[2]}/{match[3]}/{match[4]}/{voice_id}.onnx"
+    model = Path(os.environ["PAPERCLIP_TTS_MODEL_DIR"]) / model_relative
     if not model.is_file() or not Path(str(model) + ".json").is_file():
         raise ValueError("model unavailable")
-    from piper import PiperVoice
+    from piper import PiperVoice, SynthesisConfig
 
     voice = PiperVoice.load(model, use_cuda=False)
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
-        voice.synthesize_wav(text, wav)
+        voice.synthesize_wav(text, wav, syn_config=SynthesisConfig(length_scale=1.0 / speed))
     data = output.getvalue()
     if len(data) > 16 * 1024 * 1024:
         raise ValueError("audio too large")

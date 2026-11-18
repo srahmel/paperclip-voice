@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
-import { useHostLocation, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
-import { routeTarget, vadDecision, voiceMessage, cleanSpokenText } from '../lib/voice-utils.mjs';
-import { transcribeLocal, speakLocal } from '../lib/local-audio.mjs';
+import { useHostLocation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
+import { routeTarget, vadDecision, voiceMessage } from '../lib/voice-utils.mjs';
+import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
 type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
+type AudioResult = { audioBase64: string; mime: string; bytes: number };
 
 const P: Record<string, CSSProperties> = {
   panel: { position: 'fixed', right: 16, bottom: 76, zIndex: 10050, maxWidth: 'calc(100vw - 32px)', width: 360, maxHeight: 'calc(100dvh - 105px)', overflowY: 'auto', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', padding: 18, boxShadow: '0 10px 30px #0003', fontFamily: 'inherit', fontSize: 14 },
@@ -53,21 +53,32 @@ export function TaskVoiceButton({ context }: PluginWidgetProps) {
   </button>;
 }
 
+export function VoiceOpenButton({ context }: PluginWidgetProps) {
+  const { pathname } = useHostLocation();
+  if (!context.companyId || !routeTarget(pathname)) return null;
+  return <button type="button" style={P.button} onClick={() => window.dispatchEvent(new CustomEvent('paperclip-voice-open', { detail: { companyId: context.companyId } }))}>Sprachmodus</button>;
+}
+
 export function VoiceOverlay({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? '';
+  const transcribe = usePluginAction('voice-transcribe');
+  const speakComment = usePluginAction('voice-speak-comment');
+  const speakStatus = usePluginAction('voice-speak-status');
+  const poll = usePluginAction('voice-poll');
+  const cancel = usePluginAction('voice-cancel');
+  const health = usePluginData<{ ready: boolean }>('voice-health', { companyId });
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
   const { pathname } = useHostLocation();
-  const [composerMount, setComposerMount] = useState<HTMLElement | null>(null);
   const sessionPathRef = useRef<string | null>(null);
   const [target, setTargetState] = useState<Target | null>(null);
   const targetRef = useRef<Target | null>(null);
   const [lastTranscript, setLastTranscript] = useState('');
   const [lastReply, setLastReply] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [autoSend, setAutoSend] = useState(true);
-  const autoSendRef = useRef(true);
+  const [autoSend, setAutoSend] = useState(false);
+  const autoSendRef = useRef(false);
   const [autoContinue, setAutoContinue] = useState(true);
   const autoContinueRef = useRef(true);
   const [silenceThreshold, setSilenceThreshold] = useState(0.035);
@@ -76,6 +87,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const conciseReplyRef = useRef(true);
   const [language, setLanguage] = useState<'de' | 'en'>('de');
 
+  const sessionActiveRef = useRef(false);
   const epochRef = useRef(0); // invalidates asynchronous work on stop/company change
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -91,9 +103,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   const setPhase = (next: Phase) => { phaseRef.current = next; setPhaseState(next); };
   const setTarget = (next: Target | null) => { targetRef.current = next; setTargetState(next); };
-  const active = (epoch: number) => epoch === epochRef.current && streamRef.current !== null && sessionPathRef.current === window.location.pathname;
+  const active = (epoch: number) => epoch === epochRef.current && sessionActiveRef.current && sessionPathRef.current === window.location.pathname;
 
   const teardown = useCallback(() => {
+    sessionActiveRef.current = false;
     epochRef.current += 1;
     sessionPathRef.current = null;
     if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
@@ -126,29 +139,18 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }, [teardown]);
   useEffect(() => { teardown(); setTarget(routeTarget(window.location.pathname) as Target | null); }, [companyId, teardown]);
 
-  // The host has no composer plugin slot. Attach a plugin-owned portal next to
-  // the dictation control only when exactly one visible composer is present.
   useEffect(() => {
-    let mount: HTMLElement | null = null;
-    const sync = () => {
-      const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="task-chat-composer-actions"] [data-testid="local-dictation"]'))
-        .filter((node) => node.getClientRects().length > 0 && !node.closest('[role="dialog"]'));
-      const anchor = routeTarget(window.location.pathname) && candidates.length === 1 ? candidates[0] : null;
-      if (mount && (!anchor || mount.previousElementSibling !== anchor)) {
-        mount.remove(); mount = null; setComposerMount(null);
-      }
-      if (anchor && !mount && anchor.parentElement) {
-        mount = document.createElement('span');
-        mount.dataset.paperclipVoiceMount = 'true';
-        anchor.insertAdjacentElement('afterend', mount);
-        setComposerMount(mount);
-      }
+    const open = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.companyId !== companyId) return;
+      const next = typeof detail.issueId === 'string' ? { kind: 'issue' as const, ref: detail.issueId } : routeTarget(pathname) as Target | null;
+      if (!next) return;
+      teardown(); setTarget(next); setError(null); setOpened(true);
     };
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { childList: true, subtree: true });
-    sync();
-    return () => { observer.disconnect(); mount?.remove(); setComposerMount(null); };
-  }, [pathname]);
+    window.addEventListener('paperclip-voice-open', open);
+    window.addEventListener('paperclip-voice-open-task', open);
+    return () => { window.removeEventListener('paperclip-voice-open', open); window.removeEventListener('paperclip-voice-open-task', open); };
+  }, [companyId, pathname, teardown]);
 
   // useHostLocation follows Paperclip's SPA navigation, including browser back.
   useLayoutEffect(() => {
@@ -157,12 +159,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     setTarget(routeTarget(pathname) as Target | null);
   }, [pathname, teardown]);
 
-  async function playAudio(result: ArrayBuffer, epoch: number): Promise<void> {
-    if (!active(epoch) || !result.byteLength) return;
+  async function playAudio(result: AudioResult, epoch: number): Promise<void> {
+    if (!active(epoch) || !result.audioBase64) return;
     const audioCtx = audioContextRef.current;
     if (!audioCtx) return;
     setPhase('speaking');
-    const decoded = await audioCtx.decodeAudioData(result);
+    const decoded = await audioCtx.decodeAudioData(audioBase64ToBuffer(result.audioBase64));
     if (!active(epoch)) return;
     await audioCtx.resume();
     await new Promise<void>((resolve, reject) => {
@@ -177,11 +179,19 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     });
   }
 
+  async function audioJob<T>(action: (params: Record<string, unknown>) => Promise<unknown>, params: Record<string, unknown>, epoch: number): Promise<T> {
+    const result = await waitForVoiceJob(
+      (payload: Record<string, unknown>) => action(payload),
+      (payload: Record<string, unknown>) => poll(payload),
+      { companyId, ...params },
+      () => active(epoch),
+      { cancel: (payload: Record<string, unknown>) => cancel(payload) },
+    );
+    return result as T;
+  }
+
   async function sayStatus(status: string, epoch: number): Promise<void> {
-    const messages: Record<string, string> = language === 'en'
-      ? { submitted: 'Sent.', no_speech: 'I did not understand.' }
-      : { submitted: 'Gesendet.', no_speech: 'Ich habe nichts verstanden.' };
-    const result = await speakLocal(companyId, messages[status] ?? status, language);
+    const result = await audioJob<AudioResult>(speakStatus, { status, language }, epoch);
     await playAudio(result, epoch);
   }
 
@@ -197,7 +207,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       for (const comment of comments) seenCommentIdsRef.current.add(comment.id);
       if (newReplies.length) {
         const latest = newReplies[newReplies.length - 1];
-        const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text, language);
+        const spoken = await audioJob<AudioResult>(speakComment, { issueId: issue, commentId: latest.id, language }, epoch);
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch);
         if (!active(epoch)) return;
@@ -243,7 +253,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       setPhase('transcribing');
       if (blob.size < 500 || blob.size > 2 * 1024 * 1024) throw new Error('Audioaufnahme ist zu kurz oder zu groß (max. 2 MiB).');
-      const text = await transcribeLocal(companyId, blob, language);
+      const audioBase64 = await audioBlobToBase64(blob);
+      if (!active(epoch)) return;
+      const transcription = await audioJob<{ text: string }>(transcribe, { audioBase64, mimeType: blob.type || 'audio/webm', language }, epoch);
+      const text = transcription.text?.trim() ?? '';
       if (!active(epoch)) return;
       if (!text) {
         await sayStatus('no_speech', epoch);
@@ -283,7 +296,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
           silenceIntervalRef.current = null;
           const latest = newReplies[newReplies.length - 1];
-          const spoken = await speakLocal(companyId, cleanSpokenText(latest.body).text, language);
+          const spoken = await audioJob<AudioResult>(speakComment, { issueId: currentIssue, commentId: latest.id, language }, epoch);
           if (!active(epoch)) return;
           setLastReply(latest.body ?? '');
           await playAudio(spoken, epoch);
@@ -353,10 +366,32 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     ensureReplyMonitor(epoch);
   }
 
+  async function importRecording(file: File): Promise<void> {
+    if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
+    if (!targetRef.current || !companyId) { setError('Öffne zuerst einen Chat oder eine Aufgabe.'); return; }
+    teardown(); setError(null); setLastTranscript('');
+    const epoch = epochRef.current;
+    sessionPathRef.current = pathname; sessionActiveRef.current = true;
+    setPhase('transcribing');
+    try {
+      const text = await audioJob<{ text: string }>(transcribe, {
+        language, mimeType: file.type || (file.name.toLowerCase().endsWith('.wav') ? 'audio/wav' : ''),
+        audioBase64: await audioBlobToBase64(file),
+      }, epoch);
+      if (!active(epoch)) return;
+      if (!text.text?.trim()) throw new Error('Keine Sprache erkannt.');
+      setLastTranscript(text.text); setPhase('review');
+    } catch (cause) {
+      if (!active(epoch)) return;
+      teardown(); setError(friendlyError(cause)); setPhase('error');
+    }
+  }
+
   async function startSession(): Promise<void> {
     if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
     if (!companyId || !targetRef.current) { setError('Öffne zuerst einen Chat oder eine Aufgabe.'); return; }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
+    if (health.data?.ready === false) { setError('Der lokale Audiodienst ist noch nicht bereit. Bitte die Voice-Plugin-Einstellungen prüfen.'); return; }
     teardown();
     setError(null);
     setLastReply('');
@@ -364,6 +399,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     setPhase('starting');
     const epoch = epochRef.current;
     sessionPathRef.current = window.location.pathname;
+    sessionActiveRef.current = true;
     try {
       const ctx = new AudioContext();
       audioContextRef.current = ctx;
@@ -394,18 +430,14 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   return <>
     <style>{`.pc-voice-task-trigger { display: none !important; } @media (max-width: 767px) { .pc-voice-panel { top: 64px !important; bottom: auto !important; max-height: calc(100dvh - 84px) !important; } }`}</style>
-    {composerMount && target && createPortal(<button type="button" className="pc-voice-toggle" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: 0, borderRadius: 6, background: 'transparent', color: 'var(--muted-foreground)', cursor: 'pointer' }} aria-label="Sprachmodus" aria-expanded={opened} aria-controls="paperclip-voice-dialog" title="Sprachmodus öffnen: sprechen und Antworten hören" onClick={() => setOpened(v => !v)}>
-      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-        <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
-      </svg>
-    </button>, composerMount)}
     {opened && <section id="paperclip-voice-dialog" className="pc-voice-panel" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <h2 style={P.title}>Sprachmodus</h2>
-        <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => setOpened(false)} aria-label="Panel schließen">×</button>
+        <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
       <p style={P.muted}>Sprechen, automatisch senden und Antworten anhören. Zum Beenden auf „Stoppen“ drücken.</p>
       <p style={{ ...P.muted, margin: '12px 0' }} role="status">{({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
+      <p style={P.muted}>Audio: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Lokaler Audiodienst nicht erreichbar'}</p>
       <label htmlFor="voice-language">Sprache</label>
       <select id="voice-language" style={P.field} value={language} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
         <option value="de">Deutsch</option><option value="en">English</option>
@@ -418,6 +450,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={conciseReply} onChange={(event) => { conciseReplyRef.current = event.target.checked; setConciseReply(event.target.checked); }} /> Knappe Antworten anfordern (sichtbar im Chat)</label>
       <label style={P.muted} htmlFor="voice-threshold">Mikrofonempfindlichkeit (Auto-Stopp bei Sprechpause)</label>
       <input id="voice-threshold" type="range" min="0.015" max="0.09" step="0.005" value={silenceThreshold} onChange={(event) => { const n = Number(event.target.value); thresholdRef.current = n; setSilenceThreshold(n); }} style={{ width: '100%', margin: '4px 0 10px' }}/>
+      <label htmlFor="voice-import" style={P.muted}>Aufnahme importieren (mit Textvorschau)</label>
+      <input id="voice-import" type="file" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,.wav" disabled={!canStart} onChange={event => {
+        const file = event.currentTarget.files?.[0]; event.currentTarget.value = '';
+        if (file) void importRecording(file);
+      }} style={{ display: 'block', maxWidth: '100%', margin: '6px 0' }} />
       </details>
       <div>
         {canStart ? <button type="button" style={P.primary} onClick={() => void startSession()}>Sprachmodus starten</button> : null}
