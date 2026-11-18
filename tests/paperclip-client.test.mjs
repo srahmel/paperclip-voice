@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeAgentChat, listVoiceTargets, paperclipApi, readNativeComments, postNativeComment } from '../src/lib/paperclip-client.mjs';
+
+test('reading a chat for playback never creates one and rejects a foreign company', async () => {
+  const calls = [];
+  const fetcher = async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => null }; };
+  await assert.rejects(readNativeAgentChat('c', 'agent', fetcher), /keine zugängliche Antwort/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'GET');
+  await assert.rejects(readNativeAgentChat('c', 'agent', async () => ({ ok: true, json: async () => ({ id: 'i', companyId: 'other' }) })), /zugängliche Antwort/);
+});
+
+test('voice target choices are bounded native reads and exclude foreign company results', async () => {
+  const options = await listVoiceTargets('c', async (url, request) => {
+    assert.equal(request.method, 'GET');
+    assert.equal(request.credentials, 'include');
+    return { ok: true, json: async () => url.endsWith('/agents')
+      ? [{ id: 'a', name: 'Synthetic', companyId: 'c' }, { id: 'foreign', companyId: 'other' }]
+      : [{ id: 'i', identifier: 'TEST-1', title: 'Synthetic task', companyId: 'c' }, { id: 'foreign', companyId: 'other' }] };
+  });
+  assert.deepEqual(options.map(option => option.ref), ['a', 'i']);
+});
 
 test('agent chat prerequisite is enabled once and does not modify other settings', async () => {
   const calls = [];

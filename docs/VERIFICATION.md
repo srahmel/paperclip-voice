@@ -70,3 +70,33 @@
 - Mobile, Bluetooth and background recording remain device-specific checks.
 - No Linux or pristine upstream-host installation acceptance is claimed. Existing
   unrelated technical host corrections remain; this removes the feature patches.
+
+## Follow-up: direct controls and navigation
+
+At the operator's request, the plugin now injects microphone/speaker controls
+immediately after the native composer Add button, and a general Voice button
+directly below Chat. Official toolbar entries remain a fallback when the exact
+DOM adapter cannot mount. No core source or additional capability was changed.
+
+- 35 tests pass, including read-only existing-chat lookup for playback and
+  company filtering of native target choices; TypeScript and build also pass.
+- On the real host, synthetic imported dictation appended to an existing draft.
+  Native Undo restored the original draft and Redo restored the appended text.
+  No Send action was used; the test draft was cleared afterwards.
+- In New Task, the microphone was adjacent to Add. Import/transcript review
+  inserted into that dialog's editor and enabled its native Create task button.
+  No task was created; the test draft was cleared and the dialog closed.
+- The first dialog layout was too short for the dictation panel. It was changed
+  to participate in dialog layout, then the complete modal flow passed.
+- On Dashboard, Voice opened from immediately below Chat and offered existing
+  native target choices. Opening it performed reads only.
+- Playback on a synthetic task with no agent reply showed a clear no-answer
+  message and did not create a chat or invoke an agent. Real speaker output and
+  physical recording remain outside this UI acceptance result.
+- Image Review's inactive navigation entry now matches native Projects:
+  transparent background, 13 px type, 6/8 px padding and 8 px horizontal margins.
+  Its active route uses the host sidebar accent and aria-current=page.
+
+These are local source/output updates to the existing installations, still
+registry versions Voice 0.2.0 and Image Review 0.1.1. The normal local-output
+watcher loaded them; no host restart or new CLI credential was needed.

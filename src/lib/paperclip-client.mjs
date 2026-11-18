@@ -60,6 +60,27 @@ export async function resolveNativeTask(companyId, reference, doFetch = fetch) {
   return issue.id;
 }
 
+export async function readNativeAgentChat(companyId, agentRef, doFetch = fetch) {
+  if (!companyId || !agentRef) throw new Error('Agent und Organisation fehlen.');
+  const issue = await paperclipApi(`/companies/${encodeURIComponent(companyId)}/chats/${encodeURIComponent(agentRef)}`, { doFetch });
+  if (!issue?.id || issue.companyId !== companyId) throw new Error('Dieser Chat enthält noch keine zugängliche Antwort.');
+  return issue.id;
+}
+
+export async function listVoiceTargets(companyId, doFetch = fetch) {
+  if (!companyId) throw new Error('Organisation fehlt.');
+  const results = await Promise.allSettled([
+    paperclipApi(`/companies/${encodeURIComponent(companyId)}/agents`, { doFetch }),
+    paperclipApi(`/companies/${encodeURIComponent(companyId)}/issues?limit=30&sortField=updated&sortDir=desc`, { doFetch }),
+  ]);
+  const agents = results[0].status === 'fulfilled' && Array.isArray(results[0].value) ? results[0].value : [];
+  const issues = results[1].status === 'fulfilled' && Array.isArray(results[1].value) ? results[1].value : [];
+  return [
+    ...agents.filter(agent => agent.companyId === companyId && agent.status !== 'terminated').map(agent => ({ kind: 'chat', ref: agent.id, label: `Chat: ${agent.name}` })),
+    ...issues.filter(issue => issue.companyId === companyId && !issue.conversationAgentId).map(issue => ({ kind: 'issue', ref: issue.id, label: `${issue.identifier ?? 'Task'}: ${issue.title}` })),
+  ];
+}
+
 export async function readNativeComments(issueId, doFetch = fetch) {
   if (!issueId) throw new Error('Issue ID is required');
   const comments = await paperclipApi(`/issues/${encodeURIComponent(issueId)}/comments?order=desc&limit=100`, { doFetch });

@@ -1,14 +1,22 @@
 # Paperclip Voice
 
 Local Whisper transcription and Piper speech for existing Paperclip tasks and
-agent chats. Version 0.2 uses the public plugin action bridge, task toolbar,
-global toolbar and app overlay. No Paperclip core patch or private composer
-DOM structure is required.
+agent chats. Version 0.2 uses the public plugin action bridge and app overlay.
+Plugin-owned JavaScript adds direct composer controls and a navigation entry;
+no Paperclip core patch is required.
 
 ## Use
 
-Open a task or existing agent chat and select **Sprachmodus** in the toolbar.
-The panel is bound to that conversation. Navigating away stops recording and
+Select the microphone beside the composer's **+** to open dictation for that
+exact input. Start recording or import an audio file, review the transcript and
+select **In Eingabe übernehmen**. Existing draft text is preserved and the
+normal Send/Create task button remains the only way to submit it. This also
+works in **New Task**. The adjacent speaker reads the latest accessible agent
+reply; reading never creates a new conversation.
+
+For a continuing voice conversation, select **Sprachmodus** directly below
+**Chat** in the left navigation. Choose an agent chat or a recent task when
+there is no current conversation. Navigating away stops recording and
 playback. Closing the panel, stopping or disabling the plugin releases audio
 resources and cancels pending audio jobs.
 
@@ -23,9 +31,28 @@ resources and cancels pending audio jobs.
 - Agent conversations require Paperclip's Agent Chat setting. Normal task/chat
   authorization applies. A submitted comment can wake its assigned agent.
 
-The native Paperclip composer and gallery are not modified. Microphone access
+The native Paperclip source and gallery are not modified. Microphone access
 requires HTTPS or localhost and a compatible browser. A suspended or locked
 mobile browser can interrupt audio.
+
+## Composer and navigation adapter
+
+The host currently has no composer-control slot or sidebar insertion-order API.
+At the operator's request, a small plugin-owned DOM adapter locates the exact
+composer Add button and binds only its own unique editable input. It also mounts
+the general Voice button after the company's Chat link. It does not inspect
+React/Lexical internals, overwrite native controls, or read arbitrary page text.
+If the structure is absent or ambiguous, it leaves native UI alone and retains
+the official toolbar fallback. Mutation scans are throttled and all mounts are
+removed on company/navigation changes or plugin unmount.
+
+Plain-text insertion follows the browser editing path and was verified with
+native Undo/Redo. The rich-editor path uses
+[`execCommand('insertText')`](https://developer.mozilla.org/en-US/docs/Web/API/Document/execCommand),
+which is deprecated but retains browser edit history. Unsupported insertion
+keeps the editable transcript rather than guessing another input. Check this
+adapter after host/browser upgrades; physical microphone/mobile acceptance is
+separate from this UI integration check.
 
 ## Local audio engine
 

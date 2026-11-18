@@ -9,7 +9,8 @@ Before an install or release:
 2. Use PAPERCLIP_PLUGIN_OUTDIR=.cache/build for a non-deploying check.
 3. Inspect the package file list. Include Python workers; exclude recordings,
    models, credentials, runtime data and archived core patches.
-4. Verify public task/global toolbar and overlay slots, authenticated actions,
+4. Verify composer Add-button mounts, draft preservation/Undo, New Task modal,
+   sidebar position below Chat, public toolbar fallbacks, authenticated actions,
    local runtime configuration and cancellation on the target host.
 5. Record remaining physical microphone/mobile checks honestly.
 

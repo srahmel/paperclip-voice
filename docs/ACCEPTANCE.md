@@ -20,6 +20,9 @@ Keep pass, fail and not-run results separate.
 - [ ] Agent-answer playback and complete live microphone conversation.
 - [x] Image selection, zoom, marking and explicit feedback without the core gallery patch.
 - [x] Four legacy feature patches removed, UI rebuilt, host healthy, old audio routes absent.
+- [x] Direct microphone/speaker beside Add, general Voice below Chat, native toolbar fallback.
+- [x] Dictation appends to the correct draft; native Undo/Redo; no automatic submission.
+- [x] New Task modal dictation inserts into its own editor without creating a task.
 - [ ] Mobile microphone, Bluetooth and locked-screen/background behavior.
 
 Do not certify unperformed physical-device or live checks from unit tests.
