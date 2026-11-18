@@ -4,7 +4,7 @@ import { routeTarget, vadDecision, voiceMessage } from '../lib/voice-utils.mjs';
 import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 
-type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'waiting' | 'speaking' | 'error';
+type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'transcribing' | 'review' | 'sending' | 'submitted' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
 type AudioResult = { audioBase64: string; mime: string; bytes: number };
@@ -224,7 +224,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function submitTranscript(text: string, epoch: number): Promise<void> {
-    if (!active(epoch)) return;
+    if (!active(epoch) || phaseRef.current === 'sending') return;
+    if (!text.trim()) throw new Error('Das Transkript ist leer.');
     const selected = targetRef.current;
     if (!selected) throw new Error('Wähle zuerst einen Agenten oder eine Aufgabe.');
     setPhase('sending');
@@ -243,6 +244,9 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try { await postNativeComment(issue, message, clientRequestId); }
     catch { throw new Error('Senden möglicherweise erfolgt. Bitte den Chat prüfen, bevor du erneut sendest.'); }
     if (!active(epoch)) return;
+    // Imported recordings are a single dictation, with no live microphone or
+    // playback context. Finish instead of entering the continuous voice loop.
+    if (!streamRef.current) { teardown(); setPhase('submitted'); return; }
     try { await sayStatus('submitted', epoch); }
     catch { throw new Error('Nachricht wurde gesendet, aber die Sprachausgabe ist ausgefallen. Bitte den Chat prüfen.'); }
     if (active(epoch)) await waitForAgent(issue, epoch);
@@ -367,7 +371,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function importRecording(file: File): Promise<void> {
-    if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
+    if (!['off', 'error', 'submitted'].includes(phaseRef.current)) return;
     if (!targetRef.current || !companyId) { setError('Öffne zuerst einen Chat oder eine Aufgabe.'); return; }
     teardown(); setError(null); setLastTranscript('');
     const epoch = epochRef.current;
@@ -388,7 +392,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function startSession(): Promise<void> {
-    if (phaseRef.current !== 'off' && phaseRef.current !== 'error') return;
+    if (!['off', 'error', 'submitted'].includes(phaseRef.current)) return;
     if (!companyId || !targetRef.current) { setError('Öffne zuerst einen Chat oder eine Aufgabe.'); return; }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
     if (health.data?.ready === false) { setError('Der lokale Audiodienst ist noch nicht bereit. Bitte die Voice-Plugin-Einstellungen prüfen.'); return; }
@@ -426,20 +430,20 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   const targetLabel = target ? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : `Chat ${target.ref}`) : 'Kein Ziel';
-  const canStart = phase === 'off' || phase === 'error';
+  const canStart = phase === 'off' || phase === 'error' || phase === 'submitted';
 
   return <>
-    <style>{`.pc-voice-task-trigger { display: none !important; } @media (max-width: 767px) { .pc-voice-panel { top: 64px !important; bottom: auto !important; max-height: calc(100dvh - 84px) !important; } }`}</style>
+    <style>{`@media (max-width: 767px) { .pc-voice-panel { top: 64px !important; bottom: auto !important; max-height: calc(100dvh - 84px) !important; } }`}</style>
     {opened && <section id="paperclip-voice-dialog" className="pc-voice-panel" style={P.panel} aria-label="Sprachmodus" aria-live="polite">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <h2 style={P.title}>Sprachmodus</h2>
         <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>Sprechen, automatisch senden und Antworten anhören. Zum Beenden auf „Stoppen“ drücken.</p>
-      <p style={{ ...P.muted, margin: '12px 0' }} role="status">{({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
+      <p style={P.muted}>Sprechen, Transkript prüfen und Antworten anhören. Automatisches Senden lässt sich in den Optionen einschalten.</p>
+      <p style={{ ...P.muted, margin: '12px 0' }} role="status">{({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
       <p style={P.muted}>Audio: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Lokaler Audiodienst nicht erreichbar'}</p>
       <label htmlFor="voice-language">Sprache</label>
-      <select id="voice-language" style={P.field} value={language} disabled={phase !== 'off' && phase !== 'error'} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
+      <select id="voice-language" style={P.field} value={language} disabled={!canStart} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
         <option value="de">Deutsch</option><option value="en">English</option>
       </select>
       <p style={P.muted}>Aktueller Chat: {targetLabel}</p>
@@ -460,7 +464,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         {canStart ? <button type="button" style={P.primary} onClick={() => void startSession()}>Sprachmodus starten</button> : null}
         {phase !== 'off' && <button type="button" style={P.button} onClick={() => { teardown(); setError(null); }}>Stoppen</button>}
         {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
-        {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { setError(friendlyError(cause)); setPhase('error'); })}>Transkript absenden</button>}
+        {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { teardown(); setError(friendlyError(cause)); setPhase('error'); })}>Transkript absenden</button>}
       </div>
       {lastTranscript && <div style={{ marginTop: 12 }}><strong>Zuletzt verstanden</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
       {lastReply && <div style={{ marginTop: 10, maxHeight: 140, overflowY: 'auto' }}><strong>Letzte Antwort</strong><p style={{ ...P.muted, whiteSpace: 'pre-wrap' }}>{lastReply.slice(0, 1300)}{lastReply.length > 1300 ? ' …' : ''}</p></div>}

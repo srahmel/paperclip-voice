@@ -18,7 +18,8 @@ resources and cancels pending audio jobs.
 - The concise-answer instruction stays visible in each submitted comment.
 - Existing agent answers stay in Paperclip and can be spoken with local Piper.
 - Under **Optionen**, import a recording for transcription and text review.
-  Imported recordings are never submitted automatically.
+  Imported recordings are never submitted automatically. After manual submission,
+  dictation finishes; follow the answer in Paperclip or start a microphone session.
 - Agent conversations require Paperclip's Agent Chat setting. Normal task/chat
   authorization applies. A submitted comment can wake its assigned agent.
 

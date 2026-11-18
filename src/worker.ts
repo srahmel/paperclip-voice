@@ -13,6 +13,7 @@ type AudioJob = {
   error?: string;
   expiresAt: number;
   controller: AbortController;
+  settled: Promise<void>;
 };
 
 const jobs = new Map<string, AudioJob>();
@@ -53,7 +54,11 @@ function requireScope(
 
 function pruneJobs(): void {
   const now = Date.now();
-  for (const [id, job] of jobs) if (job.expiresAt <= now) { job.controller.abort(); jobs.delete(id); }
+  for (const [id, job] of jobs) if (job.expiresAt <= now) {
+    job.controller.abort();
+    // Keep pending work counted against capacity until its process has exited.
+    void job.settled.then(() => { if (jobs.get(id) === job) jobs.delete(id); });
+  }
 }
 
 function startJob(companyId: string, ownerId: string, work: (signal: AbortSignal) => Promise<unknown>): { jobId: string } {
@@ -67,12 +72,12 @@ function startJob(companyId: string, ownerId: string, work: (signal: AbortSignal
     if (completed) jobs.delete(completed[0]); else throw new Error('Voice processor is busy');
   }
   const jobId = randomUUID();
-  const job: AudioJob = { companyId, ownerId, state: 'pending', expiresAt: Date.now() + JOB_TTL_MS, controller: new AbortController() };
+  const job: AudioJob = { companyId, ownerId, state: 'pending', expiresAt: Date.now() + JOB_TTL_MS, controller: new AbortController(), settled: Promise.resolve() };
   jobs.set(jobId, job);
   // Never await inference in a Paperclip bridge action: the worker RPC defaults to 30 seconds.
-  void Promise.resolve().then(() => work(job.controller.signal)).then(
+  job.settled = Promise.resolve().then(() => work(job.controller.signal)).then(
     (result) => { if (jobs.get(jobId) === job) { job.state = 'ready'; job.result = result; } },
-    () => { if (jobs.get(jobId) === job) { job.state = 'error'; job.error = 'Local audio processing failed; check Voicebox health and configuration'; } },
+    () => { if (jobs.get(jobId) === job) { job.state = 'error'; job.error = 'Local audio processing failed; check the Voice plugin configuration'; } },
   );
   return { jobId };
 }
@@ -148,7 +153,9 @@ const plugin = definePlugin({
       const jobId = requiredString(params, 'jobId');
       const job = jobs.get(jobId);
       if (!job || job.companyId !== companyId || job.ownerId !== ownerId) throw new Error('Voice job not found');
-      job.controller.abort(); jobs.delete(jobId);
+      job.controller.abort();
+      await job.settled;
+      jobs.delete(jobId);
       return { cancelled: true };
     });
 
@@ -169,7 +176,12 @@ const plugin = definePlugin({
     try { parseConfig(raw); return { ok: true, errors: [], warnings: [] }; }
     catch (error) { return { ok: false, errors: [error instanceof Error ? error.message : String(error)], warnings: [] }; }
   },
-  async onShutdown() { for (const job of jobs.values()) job.controller.abort(); jobs.clear(); },
+  async onShutdown() {
+    const pending = [...jobs.values()];
+    for (const job of pending) job.controller.abort();
+    await Promise.all(pending.map(job => job.settled));
+    jobs.clear();
+  },
   async onHealth() { return { status: 'ok' }; },
 });
 

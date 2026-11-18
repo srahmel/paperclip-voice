@@ -11,6 +11,10 @@
 - New subprocess tests exercise real pipe I/O, environment filtering, output
   bounds, timeout and cancellation. Worker tests reject another company/user,
   agent invocation, unauthorized job polling/cancellation, and stale shutdown jobs.
+- Final code review removed an inherited style that hid the public task button.
+  Imported recording submission now finishes without entering a microphone loop;
+  worker cancellation/shutdown awaits the owned processing operation. Tests and
+  TypeScript passed again after these changes. Live UI acceptance is still pending.
 - Native Windows / Node 24.22.1: plugin-owned Python code generated a 167468-byte
   WAV with the installed German Piper voice, then transcribed it with the
   installed offline faster-whisper model. Most of the synthetic phrase was
