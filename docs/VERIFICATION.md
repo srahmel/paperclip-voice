@@ -33,12 +33,40 @@
 - The host deliberately filters plugin environments. Native Python/SystemRoot
   and model locations therefore need explicit company plugin configuration.
 
-## Still requires live proof
+## Completed on the existing Windows host
 
-- Reloaded plugins and authorized configuration on the actual Paperclip host.
-- Imported recording through the real authenticated plugin action bridge.
-- Physical microphone, playback and full voice conversation with a human.
-- Standalone image entry and editor after removal of the native gallery patch.
-- Controlled removal of the old feature patches, host UI build, health and
-  endpoint absence checks. No stock-host or Linux acceptance is claimed here.
+- Voice 0.2.0 and Image Review 0.1.1 are ready, with no recorded plugin error.
+  The operator approved the additional Voice capabilities. The upgrade endpoint
+  refused capability expansion and offered no working approval continuation;
+  normal soft uninstall/reinstall retained the same plugin ID and preserved data.
+- Explicit company-scoped native runtime/model paths and Windows SystemRoot were
+  configured. The Plugin Manager displays the settings and passes configuration
+  validation. The actual audio health action returns ready.
+- An imported synthetic WAV produced an editable transcript through the real
+  authenticated bridge. Automatic submission remained off. Manual submission
+  created one native comment on an unassigned synthetic task and finished the
+  dictation. The task stayed completed; the tests caused no agent runs.
+- After the four local feature patches were removed, the UI was built into its
+  normal output retaining old assets. The existing orderly restart drained zero
+  agent runs, stopped PostgreSQL and exited with code zero. Windows briefly
+  retained old port entries; the runner waited until the port was released.
+  The initial short observation window expired before restart completed, then
+  the new process reached healthy/ready and loaded all three installed plugins.
+- The exact authenticated company-scoped legacy dictation/speech routes return
+  404. The standard composer has no legacy microphone/speaker controls. Both
+  public Voice toolbar entries work. Import/transcript preview was repeated on
+  this core without sending a second voice comment.
+- A real post-restart speech job returned a validated 31276-byte WAV through the
+  plugin bridge. This proves synthesis and transport, not physical playback.
+- The standalone image editor selected a native synthetic attachment, zoomed
+  from 49 to 62 percent, drew one mark and explicitly saved feedback plus an
+  annotated attachment using the normal APIs after core patch removal.
+- The temporary CLI admin token was revoked, its subsequent request returned
+  401, and its local credential was removed. Browser sessions were preserved.
+
+## Remaining acceptance limits
+
+- Physical microphone, audible playback and full voice conversation with a human.
 - Mobile, Bluetooth and background recording remain device-specific checks.
+- No Linux or pristine upstream-host installation acceptance is claimed. Existing
+  unrelated technical host corrections remain; this removes the feature patches.
