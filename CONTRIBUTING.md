@@ -8,5 +8,6 @@ Contributions are welcome once the repository is published. The priority is **na
 4. Do not add external speech API services as required dependencies, nor log raw audio/transcripts.
 5. Never commit private records, real conversations, API tokens or proprietary service configurations. Use synthetic test data.
 6. License newly contributed code under this repository's MIT license; check third-party dependencies and model terms before adding them.
+7. Write Markdown documentation and source-code comments in English, including architecture and design documents. Preserve intentional UI localization and test fixtures.
 
 Before opening a PR, read `docs/ACCEPTANCE.md` and `SECURITY.md`.

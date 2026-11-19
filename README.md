@@ -108,3 +108,10 @@ See [the verification record](docs/VERIFICATION.md) and
 [acceptance checklist](docs/ACCEPTANCE.md). A build or synthetic speech roundtrip
 does not prove microphone capture, human speech quality, Bluetooth or mobile
 background operation.
+
+## Repository language
+
+Write all Markdown documentation and source-code comments in English, including
+architecture and design documents. Localized user-interface strings and test
+fixtures may remain in their intended language; documentation may quote exact
+UI labels to help users identify controls.

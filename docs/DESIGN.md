@@ -1,17 +1,21 @@
-# Architektur und bewusste Grenzen
+# Architecture and deliberate limitations
 
-## Eine Datenquelle
+This document records the original Voicebox architecture and its limitations.
+For the current default Python backend and plugin-only installation, see the
+[README](../README.md) and [migration verification record](VERIFICATION.md).
 
-- Paperclip `GET/POST /api/companies/:companyId/chats/:agentRef` öffnet/erstellt eine **normale** Agentenchat-Issue nur beim ersten Senden.
-- Paperclip `POST /api/issues/:issueId/comments` schreibt die Spracheingabe als normalen menschlich authentifizierten Kommentar, inklusive idempotency `clientRequestId`.
-- Paperclip `GET /api/issues/:issueId/comments` bzw. die SDK `ctx.issues.listComments` lesen die **gleichen** originalen Agentenantworten.
-- Kein `ctx.agents.sessions.create`, kein separates History-Backend. Der Agentenchat bleibt im Haupt-UI sichtbar.
+## One source of data
 
-## Audio nur auf dem Host
+- Paperclip `GET/POST /api/companies/:companyId/chats/:agentRef` opens/creates a **normal** agent-chat issue only on the first submission.
+- Paperclip `POST /api/issues/:issueId/comments` writes voice input as a normal human-authenticated comment, including the idempotency `clientRequestId`.
+- Paperclip `GET /api/issues/:issueId/comments` or SDK `ctx.issues.listComments` reads the **same** original agent replies.
+- No `ctx.agents.sessions.create` and no separate history backend. The agent chat remains visible in the main UI.
+
+## Audio stays on the host
 
 ```text
-Smartphone/PC -- Tailscale HTTPS --> Paperclip-UI (Plugin-Slot)
-  MediaRecorder + Audio-RMS-Silence-Detection
+Smartphone/PC -- Tailscale HTTPS --> Paperclip UI (plugin slot)
+  MediaRecorder + audio RMS silence detection
          | base64 JSON, max 2 MiB, signed-in user
          v
   Paperclip Plugin Worker (validates company, audio, issue)
@@ -29,25 +33,36 @@ Smartphone/PC -- Tailscale HTTPS --> Paperclip-UI (Plugin-Slot)
   Browser WebAudio playback
 ```
 
-## Sprache kurz, Arbeit vollständig
+## Concise speech, complete work
 
-Die optionale knappe Antwortanweisung steht **sichtbar am Ende des Nutzerkommentars**. Es gibt keine globale Prompt-Änderung, keine versteckte Agent-Message. Die Sprachausgabe kürzt den gesprochenen Text deterministisch (ohne zusätzliches LLM), behält das volle Paperclip-Ergebnis im Chat. Dies ist bewusst nicht dieselbe Semantik wie ein kurz gefasster Systemprompt.
+The optional concise-answer instruction is **visible at the end of the user's
+comment**. There is no global prompt change or hidden agent message. Speech
+output shortens the spoken text deterministically, without an additional LLM,
+while retaining the complete Paperclip result in the chat. This deliberately
+has different semantics from a concise system prompt.
 
 ## Windows/Linux
 
-Der Plugin-Code verwendet keine OS-Pfade oder Shellaufrufe. Voicebox läuft isoliert als Linux-Container sowohl unter Docker Desktop (Windows) als auch Docker Engine (Linux). Keine CUDA-/NVIDIA-Abhängigkeit. Erstes Docker-Image benötigt Internet für Modelle; spätere Nutzung ist offline-fähig.
+The plugin code uses no OS paths or shell calls. Voicebox runs in an isolated
+Linux container under both Docker Desktop (Windows) and Docker Engine (Linux).
+There is no CUDA/NVIDIA dependency. The first Docker image build requires
+Internet access for models; subsequent use can operate offline.
 
-## Bekannte Risiken
+## Known risks
 
-1. **SDK-Alpha:** `appShellOverlay` und Bridge-Version müssen bei Paperclip-Updates erneut validiert werden.
-2. **Provider-Modell:** Upstream-Voicebox-Image ist englischsprachig; unser Dockerfile bäckt deutsche/multilinguale Modelle nach. Build noch nicht live verifiziert.
-3. **Audio-Bandbreite:** WAV base64 über Paperclip-JSON-Bridge für kurze Antworten. Lange Podcasts nicht vorgesehen.
-4. **Browser-Hintergrund:** Bildschirm-Sperre kann AudioContext und MediaRecorder unterbrechen.
-5. **VAD bei Autofahrt:** einfaches RMS statt neural VAD; reale Fahrgeräusche können die Erkennung stören.
-6. **Polling:** alle ~1,8–2,5 s; nach langer Sitzung oder Navigation langsamer oder unterbrochen. Vollständiger Event-Stream wäre eine Folgeoptimierung.
-7. **Ablauf bei langer Aufgabe:** mehrere spätere Kommentare werden beobachtet, aber eine neue Antwort während aktiver Nutzersprache wird erst nach dem aktuellen Turn berücksichtigt.
-8. **Automatisches Senden:** Transkriptionsfehler gelangen ggf. als Anweisung in Paperclip. Für risikoreiche Aufgaben Auto-Send deaktivieren; Approval-Regeln separat erzwingen.
+1. **Alpha SDK:** `appShellOverlay` and the bridge version must be revalidated after Paperclip updates.
+2. **Provider model:** the upstream Voicebox image is English-only; our Dockerfile adds German/multilingual models. The build has not yet been verified live.
+3. **Audio bandwidth:** base64 WAV travels through Paperclip's JSON bridge for short replies. Long podcasts are outside the scope.
+4. **Background browser:** locking the screen can interrupt AudioContext and MediaRecorder.
+5. **VAD while driving:** simple RMS is used instead of neural VAD; actual driving noise can disrupt detection.
+6. **Polling:** approximately every 1.8–2.5 seconds; it may slow down or stop after a long session or navigation. A complete event stream would be a subsequent optimization.
+7. **Long-running tasks:** multiple later comments are observed, but a new reply received while the user is speaking is considered only after the current turn.
+8. **Automatic submission:** transcription errors may become instructions in Paperclip. Disable auto-send for high-risk tasks; enforce approval rules separately.
 
-## Öffentliche Weiterentwicklung
+## Public development roadmap
 
-Zuerst Tests auf der unveränderten lokalen Paperclip-Instanz. Danach native SDK-Berechtigungen und Auth-Tests, bessere VAD, UI-Lokalisierung, optional browser-lokale Speech-TTS, gepufferte Statusantworten, Android-Hintergrundmodus (als eigenes Clientscope). Vor Release: Lizenzmatrix, Open-Source-Security-Audit, keine vertraulichen private company-Daten oder Pfade in veröffentlichtem Code.
+First test on the unchanged local Paperclip instance. Next: native SDK permissions
+and authentication tests, better VAD, UI localization, optional browser-local
+speech synthesis, buffered status replies, and Android background operation as a
+separate client scope. Before release: a license matrix, an open-source security
+audit, and no confidential private-company data or paths in published code.

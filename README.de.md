@@ -1,26 +1,29 @@
 # Paperclip Voice
 
-Lokales Diktieren und Vorlesen für bestehende Paperclip-Aufgaben und Agentenchats.
-Version 0.2 benötigt keine Änderungen am Paperclip-Kern. Das Plugin setzt per
-JavaScript ein Mikrofon und einen Vorlese-Button neben das Plus der Eingabeleiste.
-Das Mikrofon öffnet Diktat für genau diese Eingabe, auch im Fenster „New Task“.
-Nach der Textvorschau ergänzt „In Eingabe übernehmen“ den vorhandenen Entwurf;
-es wird nichts automatisch gesendet oder angelegt. Der Lautsprecher liest die
-letzte zugängliche Agentenantwort, ohne dabei einen Chat anzulegen.
+Local dictation and read-aloud support for existing Paperclip tasks and agent chats.
+Version 0.2 requires no changes to Paperclip core. Plugin-owned JavaScript places
+a microphone and a read-aloud button next to the composer's plus button.
+The microphone opens dictation for that exact input, including the New Task dialog.
+After transcript review, the insert-transcript button appends to the existing
+draft; nothing is submitted or created automatically. The speaker reads the
+latest accessible agent reply without creating a chat.
 
-Der allgemeine Sprachmodus steht links direkt unter „Chat“. Dort lässt sich
-ein bestehender Task oder Agentenchat auswählen. Ein kleiner, begrenzter
-DOM-Adapter sorgt für die Positionierung. Wenn Paperclip seine Struktur ändert
-oder die Zuordnung nicht eindeutig ist, bleibt der offizielle Toolbar-Einstieg
-als Rückfall erhalten. Es werden keine internen React-/Editor-Objekte verwendet.
+General voice mode is available directly below Chat in the left navigation.
+It lets you select an existing task or agent chat. A small, narrowly scoped DOM
+adapter handles placement. If Paperclip's structure changes or the target cannot
+be identified unambiguously, the official toolbar entry remains available as a
+fallback. No internal React or editor objects are used.
 
-Das Transkript wird zunächst zur Prüfung angezeigt. Automatisches Senden ist
-optional; importierte Aufnahmen bleiben immer in der Textvorschau. Stoppen,
-Schließen oder ein Seitenwechsel beendet Aufnahme und Wiedergabe.
+The transcript is shown for review first. Automatic submission is optional;
+imported recordings always remain in transcript review. Stopping, closing the
+panel or navigating away ends recording and playback.
 
-Der Python-Backend verwendet eine vorhandene lokale Whisper-/Piper-Installation.
-Python- und Modellpfade sind in den Plugin-Einstellungen konfigurierbar;
-bestehende PAPERCLIP_VOICE_*- und PAPERCLIP_TTS_*-Einstellungen dienen als Vorgabe.
-Audioverarbeitung läuft im Plugin-Worker mit begrenzten Unterprozessen, ohne
-zusätzlichen Port. Die ausführliche [englische Anleitung](README.md) beschreibt
-Installation und die getrennte Abnahme von Mikrofon und Mobilgeräten.
+The Python backend uses an existing local Whisper/Piper installation.
+Python and model paths are configurable in the plugin settings; existing
+`PAPERCLIP_VOICE_*` and `PAPERCLIP_TTS_*` settings provide defaults.
+Audio processing runs in the plugin worker using bounded subprocesses, without
+an additional port. The detailed [installation and usage guide](README.md)
+describes installation and separate microphone/mobile-device acceptance checks.
+
+This file retains its historical filename for existing links. Repository
+Markdown documentation and code comments are maintained in English.
