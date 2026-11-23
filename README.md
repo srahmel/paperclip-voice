@@ -81,6 +81,39 @@ The optional `voicebox` backend supports an existing loopback service. The old
 Docker recipe is not a prerequisite: its upstream image rejected anonymous
 pulling during migration and is not a verified installation path.
 
+### German hands-free pilot
+
+Set `moonshinePython` to a separate Python environment containing
+`dictation/requirements-streaming.txt`, and set `moonshineModelDir` to the German
+Small Streaming model directory emitted by the Moonshine downloader. For example,
+run this once in the dedicated environment:
+
+```sh
+python -m pip install -r dictation/requirements-streaming.txt
+python -m moonshine_voice.download --stt --language de --model-arch 4 --root /path/to/local/model-cache
+```
+
+Moonshine's 0.1.6 Python downloader prints a generic Community License notice
+for every language other than English. The project's [0.1.6 release license][moonshine-license]
+and [model list][moonshine-models] identify German Small Streaming as MIT-licensed.
+
+The plugin shows **Freisprechen starten (sendet automatisch)** in German for a
+configured local Python backend. Select an accessible chat or task before
+starting. The browser sends speech in chunks over authenticated Paperclip plugin
+actions. An in-memory recognizer stays active between turns, and a preloaded
+Piper prompt plays if the turn needs more time. Speaking again stops playback and
+begins a new turn. Agent work already submitted to Paperclip continues.
+
+The runtime reads preinstalled model files and has no separate network listener,
+cloud speech service, or audio recording store. The accepted text is posted as
+a normal Paperclip comment and follows the assigned agent's existing execution
+and data processing configuration. The browser requires a secure origin and
+AudioWorklet support. The pilot is browser-based, so validate background capture,
+Bluetooth, road noise, and screen lock on the target device before mobile use.
+
+[moonshine-license]: https://github.com/moonshine-ai/moonshine/blob/v0.1.6/docs/license.md
+[moonshine-models]: https://github.com/moonshine-ai/moonshine/blob/v0.1.6/docs/models/available-models.md
+
 ## Build and install
 
 Use Node.js 24.11+ in the existing plugin checkout:

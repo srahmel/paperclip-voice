@@ -3,9 +3,9 @@ import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.2.0',
+  version: '0.3.0',
   displayName: 'Paperclip Voice (Local)',
-  description: 'Talk with existing Paperclip agents using local Whisper and Piper, without modifying the Paperclip core.',
+  description: 'Talk with existing Paperclip agents using local Whisper, Piper and optional German streaming speech recognition.',
   author: 'paperclip-voice contributors',
   categories: ['ui'],
   capabilities: [
@@ -22,6 +22,8 @@ const manifest: PaperclipPluginManifestV1 = {
       windowsSystemRoot: { type: 'string', title: 'Windows system directory', description: 'SystemRoot for the local Python processes on Windows.' },
       sttPython: { type: 'string', title: 'Whisper Python executable', description: 'Leave empty to use the existing PAPERCLIP_VOICE_PYTHON setting.' },
       sttModelDir: { type: 'string', title: 'Whisper model directory', description: 'Leave empty to use PAPERCLIP_VOICE_MODEL.' },
+      moonshinePython: { type: 'string', title: 'Moonshine Python executable', description: 'Optional local runtime for German hands-free mode.' },
+      moonshineModelDir: { type: 'string', title: 'Moonshine model directory', description: 'Local German Small Streaming model files.' },
       ttsPython: { type: 'string', title: 'Piper Python executable', description: 'Leave empty to use PAPERCLIP_TTS_PYTHON.' },
       ttsModelDir: { type: 'string', title: 'Piper model directory', description: 'Leave empty to use PAPERCLIP_TTS_MODEL_DIR.' },
       voiceboxUrl: {

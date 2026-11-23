@@ -4,12 +4,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64Audio, normaliseAudioMime } from './voice-utils.mjs';
 
-function packageRoot() {
+export function packageRoot() {
   let root = dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 5; i++, root = dirname(root)) {
     try { if (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name === 'paperclip-plugin-voice') return root; } catch {}
   }
   throw new Error('Voice plugin package is unavailable');
+}
+
+export function audioWorkerEnvironment(env = {}) {
+  const inherited = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'TEMP', 'TMP'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
+  return { ...inherited, ...env, PYTHONNOUSERSITE: '1', PYTHONIOENCODING: 'utf-8', HF_HUB_OFFLINE: '1', OMP_NUM_THREADS: '4', OPENBLAS_NUM_THREADS: '1' };
 }
 
 export function localRuntime(config = {}, env = process.env) {
@@ -35,11 +40,10 @@ export function localAudioReady(config = {}) {
 export function runAudioWorker({ executable, script, args = [], input, env = {}, signal, timeoutMs = 180_000, maxBytes = 6 * 1024 * 1024 }) {
   if (signal?.aborted) return Promise.reject(new Error('Audio job cancelled'));
   if (!executable || !script) return Promise.reject(new Error('Local audio runtime is not configured'));
-  const childEnv = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'TEMP', 'TMP'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [script, ...args], {
       shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
-      env: { ...childEnv, ...env, PYTHONNOUSERSITE: '1', PYTHONIOENCODING: 'utf-8', HF_HUB_OFFLINE: '1', OMP_NUM_THREADS: '4', OPENBLAS_NUM_THREADS: '1' },
+      env: audioWorkerEnvironment(env),
     });
     const chunks = [];
     let size = 0, stopped = false;

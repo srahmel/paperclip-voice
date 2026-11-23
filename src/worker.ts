@@ -1,4 +1,5 @@
 import { localAudioReady, synthesizeWithPython, transcribeWithPython } from './lib/local-python.mjs';
+import { LocalSpeechStream, localStreamReady, MAX_STREAM_CHUNK_BYTES } from './lib/local-stream.mjs';
 import { randomUUID } from 'node:crypto';
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
 import { decodeBase64Audio, isAgentComment, parseConfig } from './lib/voice-utils.mjs';
@@ -19,16 +20,27 @@ type AudioJob = {
 const jobs = new Map<string, AudioJob>();
 const JOB_TTL_MS = 10 * 60_000;
 const MAX_ACTIVE_JOBS = 4;
+const STREAM_IDLE_MS = 90_000;
+type VoiceStream = { companyId: string; ownerId: string; process: LocalSpeechStream; expiry?: ReturnType<typeof setTimeout> };
+const streams = new Map<string, VoiceStream>();
 const STATUS_MESSAGES: Record<string, Record<string, string>> = {
   de: {
     submitted: 'Gesendet.',
+    waiting: 'Moment, ich schaue nach.',
     no_speech: 'Ich habe nichts verstanden.',
   },
   en: {
     submitted: 'Sent.',
+    waiting: 'One moment, I am checking.',
     no_speech: 'I did not understand.',
   },
 };
+
+function refreshStreamExpiry(stream: VoiceStream) {
+  clearTimeout(stream.expiry);
+  stream.expiry = setTimeout(() => stream.process.close(), STREAM_IDLE_MS);
+  stream.expiry.unref();
+}
 
 function requiredString(params: Record<string, unknown>, name: string): string {
   const value = params[name];
@@ -95,8 +107,56 @@ const plugin = definePlugin({
     ctx.data.register('voice-health', async (params) => {
       const companyId = requiredString(params, 'companyId');
       const config = await configFor(companyId);
-      try { return { ready: config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl }) }; }
+      try {
+        const ready = config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl });
+        return { ready, streamingReady: ready && localStreamReady(config) };
+      }
       catch { return { ready: false }; }
+    });
+
+    ctx.actions.register('voice-stream-start', async (params, auth) => {
+      const scope = requireScope(params, auth);
+      const config = await configFor(scope.companyId);
+      if (!localStreamReady(config)) throw new Error('Local streaming speech recognition is not configured');
+      if (streams.size >= MAX_ACTIVE_JOBS || [...streams.values()].some(stream => stream.companyId === scope.companyId && stream.ownerId === scope.ownerId)) {
+        throw new Error('Another hands-free session is already active');
+      }
+      const streamId = randomUUID();
+      const process = new LocalSpeechStream(config, { onClose: () => {
+        clearTimeout(stream.expiry);
+        streams.delete(streamId);
+      } });
+      const stream: VoiceStream = { ...scope, process };
+      streams.set(streamId, stream);
+      refreshStreamExpiry(stream);
+      const ready = await process.request({ command: 'ready' }, 20_000);
+      if (ready?.ready !== true) { process.close(); throw new Error('Local streaming speech recognition could not start'); }
+      return { streamId };
+    });
+
+    ctx.actions.register('voice-stream-update', async (params, auth) => {
+      const { companyId, ownerId } = requireScope(params, auth);
+      const stream = streams.get(requiredString(params, 'streamId'));
+      if (!stream || stream.companyId !== companyId || stream.ownerId !== ownerId) throw new Error('Voice stream not found');
+      if (params.command === 'stop') {
+        stream.process.close();
+        await stream.process.done;
+        return { stopped: true };
+      }
+      if (stream.process.closed) throw new Error('Voice stream is closed');
+      if (params.command === 'keepalive') {
+        refreshStreamExpiry(stream);
+        return { ready: true };
+      }
+      if (params.command === 'finish') {
+        refreshStreamExpiry(stream);
+        return stream.process.request({ command: 'finish' });
+      }
+      if (params.command !== 'audio') throw new Error('Unknown voice stream command');
+      const audio = requiredString(params, 'audioBase64');
+      if (audio.length > Math.ceil(MAX_STREAM_CHUNK_BYTES / 3) * 4 || decodeBase64Audio(audio).length > MAX_STREAM_CHUNK_BYTES) throw new Error('Voice stream audio chunk is too large');
+      refreshStreamExpiry(stream);
+      return stream.process.request({ command: 'audio', audio });
     });
 
     ctx.actions.register('voice-transcribe', async (params, auth) => {
@@ -177,9 +237,11 @@ const plugin = definePlugin({
     catch (error) { return { ok: false, errors: [error instanceof Error ? error.message : String(error)], warnings: [] }; }
   },
   async onShutdown() {
+    const activeStreams = [...streams.values()];
+    for (const stream of activeStreams) stream.process.close();
     const pending = [...jobs.values()];
     for (const job of pending) job.controller.abort();
-    await Promise.all(pending.map(job => job.settled));
+    await Promise.all([...pending.map(job => job.settled), ...activeStreams.map(stream => stream.process.done)]);
     jobs.clear();
   },
   async onHealth() { return { status: 'ok' }; },

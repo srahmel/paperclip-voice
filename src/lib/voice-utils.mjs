@@ -28,7 +28,7 @@ export function assertLocalVoiceboxUrl(value) {
 export function parseConfig(raw = {}) {
   const config = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
   if (!['python', 'voicebox'].includes(config.backend)) throw new Error('Invalid audio backend');
-  for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
+  for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot', 'moonshinePython', 'moonshineModelDir']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
   config.voiceboxUrl = assertLocalVoiceboxUrl(config.voiceboxUrl);
   if (!['de', 'en'].includes(config.language)) throw new Error('language must be de or en');
   if (!/^[a-z]{2}_[A-Z]{2}-[a-zA-Z0-9_-]{2,80}$/.test(config.voice)) throw new Error('Invalid Piper voice identifier');

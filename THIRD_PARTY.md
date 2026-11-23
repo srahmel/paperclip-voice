@@ -9,5 +9,6 @@ This repository's **plugin code** is MIT. It does not vendor Voicebox source, mo
 | OpenAI Whisper models converted by SYSTRAN | https://huggingface.co/Systran/faster-whisper-small | Verify model terms before redistribution |
 | Piper TTS engine | https://github.com/rhasspy/piper | `piper-tts` distribution uses GPL-3.0; binary image redistribution carries obligations |
 | German voice `de_DE-thorsten-medium` | https://huggingface.co/rhasspy/piper-voices/tree/main/de/de_DE/thorsten/medium | Voice model card states training dataset CC0; inspect any additional terms |
+| Moonshine runtime and German Small Streaming model | [Moonshine v0.1.6 license](https://github.com/moonshine-ai/moonshine/blob/v0.1.6/docs/license.md) | MIT for this streaming model; installed separately |
 
 **Important:** Do not publish/re-distribute a prebuilt combined Docker image as “MIT-only”. Source-only release is the default until legal review and license/notice completeness have been checked. The Dockerfile is provided as a local build recipe, not a license waiver.

@@ -32,9 +32,9 @@ export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch
   return issue.id;
 }
 
-// A user's explicit start of an agent voice conversation may enable the one
-// Paperclip feature it requires. The server enforces instance-admin access.
-export async function ensureAgentChatAvailable(doFetch = fetch) {
+// Legacy conversations may enable Agent Chat using the caller's existing admin
+// permissions. Callers that only check availability can opt out of this write.
+export async function ensureAgentChatAvailable(doFetch = fetch, { allowEnable = true } = {}) {
   const path = '/api/instance/settings/experimental';
   const options = { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000) };
   let response;
@@ -43,6 +43,7 @@ export async function ensureAgentChatAvailable(doFetch = fetch) {
   if (!response.ok) throw new Error('Agent-Chat-Einstellung konnte nicht geprüft werden. Bitte Anmeldung und Berechtigung prüfen.');
   const before = await response.json();
   if (before.enableAgentChat === true) return { enabledNow: false };
+  if (!allowEnable) throw new Error('Agenten-Chat ist deaktiviert. Bitte benutze eine bestehende Aufgabe oder lass Agent Chat von einem Administrator einschalten.');
   try {
     response = await doFetch(path, { ...options, method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enableAgentChat: true }), signal: AbortSignal.timeout(10000) });
   } catch { throw new Error('Agenten-Chat konnte nicht automatisch eingeschaltet werden. Bitte Verbindung prüfen.'); }

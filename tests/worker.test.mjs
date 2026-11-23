@@ -31,6 +31,14 @@ test('audio job status and cancellation require the original company and user', 
   await assert.rejects(actions.get('voice-poll')(params, auth), /not found/);
 });
 
+test('hands-free stream actions require the matching human company and an installed local model', async () => {
+  const start = actions.get('voice-stream-start');
+  const update = actions.get('voice-stream-update');
+  await assert.rejects(start({ companyId: 'company-b' }, auth), /authenticated company user/);
+  await assert.rejects(start({ companyId: 'company-a' }, auth), /not configured/);
+  await assert.rejects(update({ companyId: 'company-a', streamId: 'unknown', command: 'audio', audioBase64: 'AA==' }, auth), /not found/);
+});
+
 test('shutdown retires pending audio jobs without replaying provider work', async () => {
   const { jobId } = await actions.get('voice-transcribe')(request, auth);
   await plugin.definition.onShutdown();
