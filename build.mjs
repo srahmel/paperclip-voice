@@ -23,6 +23,5 @@ await Promise.all([
   esbuild.build(presets.esbuild.worker),
   esbuild.build(presets.esbuild.manifest),
   esbuild.build({ ...presets.esbuild.ui, jsx: 'automatic' }),
-  esbuild.build({ entryPoints: ['src/ui/voice-capture-worklet.js'], outfile: resolve(outdir, 'ui/voice-capture-worklet.js'), target: 'es2022' }),
 ]);
 console.log('Built Paperclip Voice plugin (worker, manifest, UI).');

@@ -17,7 +17,10 @@ test('uploads speech in bounded chunks before the turn ends and reuses the strea
   let stop;
   try {
     stop = await startLocalConversation({
-      context: { sampleRate: 48000, audioWorklet: { async addModule(url) { assert.match(url, /^\/_plugins\/paperclip-plugin-voice\/ui\//); } } },
+      context: { sampleRate: 48000, audioWorklet: { async addModule(url) {
+        assert.match(url, /^blob:/);
+        assert.match(await (await fetch(url)).text(), /registerProcessor\('paperclip-voice-capture'/);
+      } } },
       input: { connect() {}, disconnect() {} },
       companyId: 'test-company',
       start: async () => ({ streamId: 'local-stream' }),

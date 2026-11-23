@@ -1,3 +1,5 @@
+import { registerVoiceCapture } from './voice-capture-worklet.js';
+
 type Frame = { data: ArrayBuffer; rms: number };
 type Action = (params: Record<string, unknown>) => Promise<unknown>;
 
@@ -21,8 +23,10 @@ export async function startLocalConversation(options: {
 }): Promise<() => void> {
   const { context, input, companyId, start, update } = options;
   if (!context.audioWorklet || context.sampleRate < 16_000) throw new Error('Dieser Browser unterstützt die lokale Live-Erkennung nicht.');
-  const asset = `/_plugins/paperclip-plugin-voice/ui/voice-capture-worklet.js?companyId=${encodeURIComponent(companyId)}`;
-  await context.audioWorklet.addModule(asset);
+  // Paperclip loads the UI as a blob module, with no stable sibling asset URL.
+  const moduleUrl = URL.createObjectURL(new Blob([`(${registerVoiceCapture.toString()})();`], { type: 'text/javascript' }));
+  try { await context.audioWorklet.addModule(moduleUrl); }
+  finally { URL.revokeObjectURL(moduleUrl); }
   if (!options.active()) return () => {};
   const result = await start({ companyId }) as { streamId?: string };
   const streamId = result?.streamId;
