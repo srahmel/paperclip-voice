@@ -1,6 +1,6 @@
 {
   "name": "paperclip-plugin-voice",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Local voice control of existing Paperclip chats and issues with Whisper, Piper and optional Moonshine streaming.",
   "license": "MIT",

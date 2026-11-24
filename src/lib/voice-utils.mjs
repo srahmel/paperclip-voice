@@ -2,11 +2,18 @@
 export const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 export const MAX_AUDIO_BASE64_CHARS = Math.ceil(MAX_AUDIO_BYTES / 3) * 4 + 4;
 export const ALLOWED_AUDIO_MIMES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav', 'audio/x-wav'];
+export const DEFAULT_VOICE_PRESET = 'Use saved voice ID';
+export const GERMAN_VOICE_PRESETS = Object.freeze({
+  [DEFAULT_VOICE_PRESET]: null,
+  Thorsten: 'de_DE-thorsten-medium',
+  Kerstin: 'de_DE-kerstin-low',
+});
 const DEFAULTS = Object.freeze({
   backend: 'python',
   voiceboxUrl: 'http://127.0.0.1:8790',
   language: 'de',
   voice: 'de_DE-thorsten-medium',
+  voicePreset: DEFAULT_VOICE_PRESET,
   maxSpokenChars: 380,
   speechRate: 1,
 });
@@ -31,7 +38,9 @@ export function parseConfig(raw = {}) {
   for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot', 'moonshinePython', 'moonshineModelDir']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
   config.voiceboxUrl = assertLocalVoiceboxUrl(config.voiceboxUrl);
   if (!['de', 'en'].includes(config.language)) throw new Error('language must be de or en');
+  if (typeof config.voicePreset !== 'string' || !Object.hasOwn(GERMAN_VOICE_PRESETS, config.voicePreset)) throw new Error('Invalid German voice preset');
   if (!/^[a-z]{2}_[A-Z]{2}-[a-zA-Z0-9_-]{2,80}$/.test(config.voice)) throw new Error('Invalid Piper voice identifier');
+  config.voice = GERMAN_VOICE_PRESETS[config.voicePreset] ?? config.voice;
   if (!Number.isInteger(config.maxSpokenChars) || config.maxSpokenChars < 120 || config.maxSpokenChars > 1000) throw new Error('maxSpokenChars out of range');
   if (typeof config.speechRate !== 'number' || config.speechRate < 0.7 || config.speechRate > 1.5) throw new Error('speechRate out of range');
   return config;

@@ -1,9 +1,10 @@
 import type { PaperclipPluginManifestV1 } from '@paperclipai/plugin-sdk';
+import { DEFAULT_VOICE_PRESET, GERMAN_VOICE_PRESETS } from './lib/voice-utils.mjs';
 
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.3.0',
+  version: '0.3.1',
   displayName: 'Paperclip Voice (Local)',
   description: 'Talk with existing Paperclip agents using local Whisper, Piper and optional German streaming speech recognition.',
   author: 'paperclip-voice contributors',
@@ -32,7 +33,8 @@ const manifest: PaperclipPluginManifestV1 = {
         default: 'http://127.0.0.1:8790',
       },
       language: { type: 'string', title: 'Default language', enum: ['de', 'en'], default: 'de' },
-      voice: { type: 'string', title: 'German Piper voice ID', default: 'de_DE-thorsten-medium' },
+      voicePreset: { type: 'string', title: 'German voice', enum: Object.keys(GERMAN_VOICE_PRESETS), default: DEFAULT_VOICE_PRESET },
+      voice: { type: 'string', title: 'Saved German Piper voice ID', description: 'Used when the German voice dropdown is set to Use saved voice ID.', default: 'de_DE-thorsten-medium' },
       maxSpokenChars: { type: 'integer', title: 'Maximum spoken characters', minimum: 120, maximum: 1000, default: 380 },
       speechRate: { type: 'number', title: 'Playback speed', minimum: 0.7, maximum: 1.5, default: 1 },
     },

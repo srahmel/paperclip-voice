@@ -77,6 +77,11 @@ Existing Windows setup helpers are in `dictation/`. Model/Python installation is
 an explicit deployment step. Opening Voice does not download models. Whisper,
 Piper and voices retain their separate licenses.
 
+Choose **Thorsten** or **Kerstin** in **German voice** under the plugin's
+configuration. **Use saved voice ID** keeps a previously configured Piper voice
+or defaults to Thorsten. The Windows Piper setup helper installs both presets.
+On an existing host, install any missing model before selecting it.
+
 The optional `voicebox` backend supports an existing loopback service. The old
 Docker recipe is not a prerequisite: its upstream image rejected anonymous
 pulling during migration and is not a verified installation path.

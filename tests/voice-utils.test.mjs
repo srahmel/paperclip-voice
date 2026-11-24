@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import manifest from '../src/manifest.ts';
 import {
   assertLocalVoiceboxUrl, parseConfig, decodeBase64Audio, normaliseAudioMime,
   cleanSpokenText, voiceMessage, routeTarget, isAgentComment, vadDecision,
@@ -10,6 +11,17 @@ test('configuration defaults to local German speech', () => {
   assert.equal(c.voiceboxUrl, 'http://127.0.0.1:8790');
   assert.equal(c.language, 'de');
   assert.equal(c.voice, 'de_DE-thorsten-medium');
+});
+
+test('the German voice dropdown selects a Piper model and preserves saved voice IDs', () => {
+  const { voicePreset } = manifest.instanceConfigSchema.properties;
+  const saved = { voice: 'de_DE-thorsten-high' };
+  assert.deepEqual(voicePreset.enum, ['Use saved voice ID', 'Thorsten', 'Kerstin']);
+  assert.equal(parseConfig(saved).voice, saved.voice);
+  assert.equal(parseConfig({ ...saved, voicePreset: voicePreset.default }).voice, saved.voice);
+  assert.equal(parseConfig({ ...saved, voicePreset: 'Thorsten' }).voice, 'de_DE-thorsten-medium');
+  assert.equal(parseConfig({ ...saved, voicePreset: 'Kerstin' }).voice, 'de_DE-kerstin-low');
+  assert.throws(() => parseConfig({ voicePreset: 'toString' }), /Invalid German voice preset/);
 });
 
 test('rejects remote or potentially unsafe backend URLs', () => {

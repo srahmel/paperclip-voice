@@ -13,6 +13,8 @@ $revision = 'b4e358ffcb232591bf73a540e70f7de528e4174a'
 $files = @(
     'de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx',
     'de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json',
+    'de/de_DE/kerstin/low/de_DE-kerstin-low.onnx',
+    'de/de_DE/kerstin/low/de_DE-kerstin-low.onnx.json',
     'en/en_US/lessac/medium/en_US-lessac-medium.onnx',
     'en/en_US/lessac/medium/en_US-lessac-medium.onnx.json'
 )
