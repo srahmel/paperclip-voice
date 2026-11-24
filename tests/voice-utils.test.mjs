@@ -49,6 +49,13 @@ test('language and voice dropdowns persist the matching local Piper selections',
   assert.throws(() => parseConfig({ dutchVoicePreset: 'Cori' }), /Invalid Dutch voice preset/);
 });
 
+test('configuration shows language and voice selectors before advanced options', () => {
+  const essentialProperties = Object.entries(manifest.instanceConfigSchema.properties)
+    .filter(([, property]) => !property['x-paperclip-advanced'])
+    .map(([key]) => key);
+  assert.deepEqual(essentialProperties, ['language', 'voicePreset', 'englishVoicePreset', 'dutchVoicePreset', 'norwegianVoicePreset']);
+});
+
 test('rejects untrusted audio types and oversized/malformed payloads', () => {
   assert.equal(normaliseAudioMime('audio/webm;codecs=opus'), 'audio/webm');
   assert.throws(() => normaliseAudioMime('application/javascript'));

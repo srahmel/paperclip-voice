@@ -14,7 +14,7 @@ normal Send/Create task button remains the only way to submit it. This also
 works in **New Task**. The adjacent speaker reads the latest accessible agent
 reply; reading never creates a new conversation.
 
-For a continuing voice conversation, select **Sprachmodus** directly below
+For a continuing voice conversation, select **Voice mode** directly below
 **Chat** in the left navigation. Choose an agent chat or a recent task when
 there is no current conversation. Navigating away stops recording and
 playback. Closing the panel, stopping or disabling the plugin releases audio
@@ -78,7 +78,7 @@ an explicit deployment step. Opening Voice does not download models. Whisper,
 Piper and voices retain their separate licenses.
 
 In **Paperclip Voice (Local) → Configuration**, choose a Piper voice for each
-language. **Default language** sets the initial selection in **Sprachmodus**,
+language. **Default language** sets the initial selection in **Voice mode**,
 where you can switch languages for dictation and spoken replies.
 
 | Language | Voices |
@@ -91,7 +91,8 @@ where you can switch languages for dictation and spoken replies.
 **Use saved voice ID** preserves the existing German Piper voice or defaults
 to Thorsten. The Windows Piper setup helper installs the model and configuration
 file for every preset. Install missing models before selecting them on an
-existing host. The Moonshine hands-free pilot uses a German streaming model.
+existing host. Runtime paths and the saved German Piper voice ID are under
+**Advanced options**. The Moonshine hands-free pilot uses a German streaming model.
 
 The optional `voicebox` backend supports an existing loopback service. The old
 Docker recipe is not a prerequisite: its upstream image rejected anonymous

@@ -22,6 +22,8 @@ const P: Record<string, CSSProperties> = {
   title: { margin: 0, fontSize: 16, fontWeight: 600 },
 };
 
+const launcherStyle: CSSProperties = { ...P.button, margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 };
+
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -47,19 +49,20 @@ function isAgentReply(comment: Comment): boolean {
 
 export function TaskVoiceButton({ context }: PluginWidgetProps) {
   if (!context.companyId || !context.entityId) return null;
-  return <button type="button" className="pc-voice-task-trigger" title="Sprachmodus für diesen Task öffnen" onClick={() => {
+  return <button type="button" className="pc-voice-task-trigger" title="Open voice mode for this task" onClick={() => {
     window.dispatchEvent(new CustomEvent('paperclip-voice-open-task', { detail: { companyId: context.companyId, issueId: context.entityId } }));
-  }} style={{ ...P.button, margin: 0, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M3 10v4M7 7v10M11 4v16M15 7v10M19 9v6M22 11v2" />
-    </svg>
-    Sprachmodus für diesen Task
+  }} style={launcherStyle}>
+    <VoiceIcon kind="microphone" />
+    <span>Voice mode</span>
   </button>;
 }
 
 export function VoiceOpenButton({ context }: PluginWidgetProps) {
   if (!context.companyId) return null;
-  return <button type="button" className="pc-voice-global-fallback" style={P.button} onClick={() => window.dispatchEvent(new CustomEvent('paperclip-voice-open', { detail: { companyId: context.companyId } }))}>Sprachmodus</button>;
+  return <button type="button" className="pc-voice-global-fallback" style={launcherStyle} onClick={() => window.dispatchEvent(new CustomEvent('paperclip-voice-open', { detail: { companyId: context.companyId } }))}>
+    <VoiceIcon kind="microphone" />
+    <span>Voice mode</span>
+  </button>;
 }
 
 export function VoiceOverlay({ context }: PluginWidgetProps) {
@@ -634,7 +637,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <button type="button" aria-label="Diktat in diese Eingabe" title="Diktat in diese Eingabe" style={iconButton} className="bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => openDictation(binding)}><VoiceIcon kind="microphone" /></button>
       {routeTarget(pathname) && !binding.root.closest('[role="dialog"]') && <button type="button" aria-label="Letzte Agentenantwort vorlesen" title="Letzte Agentenantwort vorlesen" style={iconButton} className="bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => void readLatestReply()}><VoiceIcon kind="speaker" /></button>}
     </>, binding.mount, `draft-${binding.id}`))}
-    {navigation && createPortal(<button type="button" aria-label="Sprachmodus" className="flex items-center gap-2.5 mx-2 rounded-lg px-2 py-1.5 pointer-coarse:py-1 text-(length:--text-compact) font-medium transition-colors bg-transparent text-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" style={{ border: 0, width: 'calc(100% - 16px)', cursor: 'pointer' }} onClick={() => window.dispatchEvent(new CustomEvent('paperclip-voice-open', { detail: { companyId } }))}><VoiceIcon kind="waves" /><span>Sprachmodus</span></button>, navigation)}
+    {navigation && createPortal(<button type="button" className="flex items-center gap-2.5 mx-2 rounded-lg px-2 py-1.5 pointer-coarse:py-1 text-(length:--text-compact) font-medium transition-colors bg-transparent text-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" style={{ border: 0, width: 'calc(100% - 16px)', cursor: 'pointer' }} onClick={() => window.dispatchEvent(new CustomEvent('paperclip-voice-open', { detail: { companyId } }))}><VoiceIcon kind="microphone" /><span>Voice mode</span></button>, navigation)}
     {panelHost && panel ? createPortal(panel, panelHost) : panel}
   </>;
 }
