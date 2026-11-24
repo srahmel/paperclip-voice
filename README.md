@@ -122,8 +122,11 @@ and [model list][moonshine-models] identify German Small Streaming as MIT-licens
 
 With German selected and Moonshine configured, hands-free mode sends speech in
 chunks over authenticated Paperclip plugin actions. An in-memory recognizer
-stays active between turns. In all four languages a Piper prompt plays if the
-turn needs more time. The microphone resumes after the spoken reply.
+stays active between turns. If it returns an empty transcript, the plugin
+passes the current turn to local Whisper using the audio already received.
+Hands-free mode plays a Piper prompt when a sent question is still waiting
+for an agent reply after three seconds. The microphone resumes after the
+spoken reply.
 
 The runtime reads preinstalled model files and has no separate network listener,
 cloud speech service, or audio recording store. The accepted text is posted as

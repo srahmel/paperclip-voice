@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import manifest from '../src/manifest.ts';
 import {
   assertLocalVoiceboxUrl, parseConfig, voiceForLanguage, decodeBase64Audio, normaliseAudioMime,
-  cleanSpokenText, voiceMessage, routeTarget, rememberVoiceAgent, voiceSessionTarget, isAgentComment, vadDecision,
+  cleanSpokenText, voiceMessage, routeTarget, rememberVoiceAgent, voiceSessionTarget, isAgentComment, createSpeechDetector, vadDecision,
 } from '../src/lib/voice-utils.mjs';
 
 test('configuration defaults to local German speech', () => {
@@ -113,6 +113,14 @@ test('only agent-authored non-deleted comments are audible', () => {
   assert.equal(isAgentComment({ body: 'Gut', authorType: 'agent' }), true);
   assert.equal(isAgentComment({ body: 'Meine Frage', authorUserId: 'human' }), false);
   assert.equal(isAgentComment({ body: 'Gut', authorAgentId: 'a', deletedAt: 'now' }), false);
+});
+
+test('steady input above the former fixed threshold is learned as background', () => {
+  const speech = createSpeechDetector(() => 0.008);
+  for (let frame = 0; frame < 20; frame++) assert.equal(speech(0.013), false);
+  assert.equal(speech(0.031), true);
+  assert.equal(speech(0.022, true), true);
+  assert.equal(speech(0.013, true), false);
 });
 
 test('VAD stops only after speech+silence or maximum duration', () => {

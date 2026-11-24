@@ -124,6 +124,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const monitorBusyRef = useRef(false);
   const utteranceStartedRef = useRef(false);
   const playingSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playbackEndedAtRef = useRef(0);
   const seenCommentIdsRef = useRef<Set<string>>(new Set());
   const activeIssueIdRef = useRef<string | null>(null);
   const localConversationRef = useRef<(() => void) | null>(null);
@@ -161,6 +162,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     recorderRef.current = null;
     playingSourceRef.current?.stop();
     playingSourceRef.current = null;
+    playbackEndedAtRef.current = 0;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     analyserRef.current = null;
@@ -232,9 +234,18 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       playingSourceRef.current = source;
       source.buffer = decoded;
       source.connect(audioCtx.destination);
-      source.onended = () => { if (playingSourceRef.current === source) playingSourceRef.current = null; resolve(); };
+      source.onended = () => {
+        if (playingSourceRef.current === source) {
+          playingSourceRef.current = null;
+          playbackEndedAtRef.current = performance.now();
+        }
+        resolve();
+      };
       try { source.start(); }
-      catch (cause) { reject(cause); }
+      catch (cause) {
+        if (playingSourceRef.current === source) playingSourceRef.current = null;
+        reject(cause);
+      }
     });
   }
 
@@ -256,13 +267,13 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     clearWaitTimer();
     const turn = voiceTurnRef.current;
     const pendingAudio = waitAudioRef.current;
-    waitTimerRef.current = setTimeout(() => {
-      waitTimerRef.current = null;
-      const current = () => active(epoch) && voiceTurnRef.current === turn && ['transcribing', 'sending', 'waiting'].includes(phaseRef.current);
+    const timer = setTimeout(() => {
+      const current = () => waitTimerRef.current === timer && active(epoch) && voiceTurnRef.current === turn && phaseRef.current === 'waiting';
       void pendingAudio?.then(audio => {
         if (audio && current()) return playDecoded(audio, current);
       }).catch(() => undefined);
-    }, 1400);
+    }, 3000);
+    waitTimerRef.current = timer;
   }
 
   async function audioJob<T>(action: (params: Record<string, unknown>) => Promise<unknown>, params: Record<string, unknown>, epoch: number, turn?: number): Promise<T> {
@@ -285,6 +296,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const turn = voiceTurnRef.current;
     const current = () => active(epoch) && turn === voiceTurnRef.current;
     setPhase('waiting');
+    if (handsFreeRef.current) scheduleWaitHint(epoch);
     const deadline = Date.now() + 15 * 60 * 1000;
     while (current() && phaseRef.current === 'waiting' && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, localConversationRef.current ? 1000 : 1800));
@@ -295,9 +307,9 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       for (const comment of comments) seenCommentIdsRef.current.add(comment.id);
       if (newReplies.length) {
         const latest = newReplies[newReplies.length - 1];
+        clearWaitTimer();
         const spoken = await audioJob<AudioResult>(speakComment, { issueId: issue, commentId: latest.id, language }, epoch, turn);
         if (!current()) return;
-        clearWaitTimer();
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch, turn);
         if (!current()) return;
@@ -355,16 +367,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       setPhase('transcribing');
       if (blob.size < 500 || blob.size > 2 * 1024 * 1024) throw new Error('Audioaufnahme ist zu kurz oder zu groß (max. 2 MiB).');
-      if (handsFreeRef.current) scheduleWaitHint(epoch);
       const audioBase64 = await audioBlobToBase64(blob);
       if (!active(epoch)) return;
       const transcription = await audioJob<{ text: string }>(transcribe, { audioBase64, mimeType: blob.type || 'audio/webm', language }, epoch);
       const text = transcription.text?.trim() ?? '';
       if (!active(epoch)) return;
       if (!text) {
-        clearWaitTimer();
-        await sayStatus('no_speech', epoch);
-        if (active(epoch)) await startCapture(epoch);
+        if (modeRef.current === 'dictation') await sayStatus('no_speech', epoch);
+        else setError('Kein Satz erkannt. Ich höre weiter zu.');
+        await startCapture(epoch);
         return;
       }
       setLastTranscript(text);
@@ -421,6 +432,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   async function startCapture(epoch: number): Promise<void> {
     if (!active(epoch)) return;
+    const echoPause = playbackEndedAtRef.current + 250 - performance.now();
+    if (playbackEndedAtRef.current && echoPause > 0) {
+      await new Promise(resolve => setTimeout(resolve, echoPause));
+      if (!active(epoch)) return;
+    }
     setMicLevel(0);
     if (localConversationRef.current) {
       setPhase('listening');
@@ -554,7 +570,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         const stop = await startLocalConversation({
           context: ctx, input, companyId, start: startStream, update: updateStream,
           active: () => active(epoch),
-          canListen: () => !playingSourceRef.current && ['listening', 'capturing', 'waiting'].includes(phaseRef.current),
+          canListen: () => !playingSourceRef.current && ['listening', 'capturing'].includes(phaseRef.current),
           threshold: () => thresholdRef.current,
           onLevel: showMicLevel,
           onStartSpeech: () => {
@@ -567,15 +583,13 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           onEndSpeech: () => {
             utteranceStartedRef.current = false;
             setPhase('transcribing');
-            scheduleWaitHint(epoch);
           },
+          recoverText: async jobId => (await audioJob<{ text: string }>(async () => ({ jobId }), {}, epoch)).text,
           onText: text => {
             const turn = voiceTurnRef.current;
             if (!text) {
-              clearWaitTimer();
-              void sayStatus('no_speech', epoch).catch(() => undefined).finally(() => {
-                if (active(epoch) && voiceTurnRef.current === turn) setPhase('listening');
-              });
+              setError('Kein Satz erkannt. Ich höre weiter zu.');
+              setPhase('listening');
               return;
             }
             setLastTranscript(text);

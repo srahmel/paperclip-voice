@@ -1,5 +1,5 @@
 import { localAudioReady, synthesizeWithPython, transcribeWithPython } from './lib/local-python.mjs';
-import { LocalSpeechStream, localStreamReady, MAX_STREAM_CHUNK_BYTES } from './lib/local-stream.mjs';
+import { LocalSpeechStream, localStreamReady, MAX_STREAM_CHUNK_BYTES, MAX_STREAM_TURN_BYTES, streamTurnWav } from './lib/local-stream.mjs';
 import { randomUUID } from 'node:crypto';
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
 import { decodeBase64Audio, isAgentComment, isVoiceLanguage, parseConfig, voiceForLanguage } from './lib/voice-utils.mjs';
@@ -21,7 +21,16 @@ const jobs = new Map<string, AudioJob>();
 const JOB_TTL_MS = 10 * 60_000;
 const MAX_ACTIVE_JOBS = 4;
 const STREAM_IDLE_MS = 90_000;
-type VoiceStream = { companyId: string; ownerId: string; process: LocalSpeechStream; expiry?: ReturnType<typeof setTimeout> };
+type VoiceStream = {
+  companyId: string;
+  ownerId: string;
+  process: LocalSpeechStream;
+  config: ReturnType<typeof parseConfig>;
+  turnChunks: Buffer[];
+  turnBytes: number;
+  fallbackJobId?: string;
+  expiry?: ReturnType<typeof setTimeout>;
+};
 const streams = new Map<string, VoiceStream>();
 const STATUS_MESSAGES: Record<string, Record<string, string>> = {
   de: {
@@ -134,9 +143,11 @@ const plugin = definePlugin({
       const streamId = randomUUID();
       const process = new LocalSpeechStream(config, { onClose: () => {
         clearTimeout(stream.expiry);
+        stream.turnChunks.length = 0;
+        if (stream.fallbackJobId) jobs.get(stream.fallbackJobId)?.controller.abort();
         streams.delete(streamId);
       } });
-      const stream: VoiceStream = { ...scope, process };
+      const stream: VoiceStream = { ...scope, process, config, turnChunks: [], turnBytes: 0 };
       streams.set(streamId, stream);
       refreshStreamExpiry(stream);
       const ready = await process.request({ command: 'ready' }, 20_000);
@@ -160,13 +171,32 @@ const plugin = definePlugin({
       }
       if (params.command === 'finish') {
         refreshStreamExpiry(stream);
-        return stream.process.request({ command: 'finish' });
+        const result = await stream.process.request({ command: 'finish' });
+        const chunks = stream.turnChunks;
+        const bytes = stream.turnBytes;
+        stream.turnChunks = [];
+        stream.turnBytes = 0;
+        if (typeof result?.text !== 'string' || result.text.trim() || !bytes || stream.process.closed) return result;
+        const audioBase64 = streamTurnWav(chunks, bytes).toString('base64');
+        const { jobId } = startJob(companyId, ownerId, async signal => ({
+          text: await transcribeWithPython({ config: stream.config, language: 'de', audioBase64, mimeType: 'audio/wav', signal }),
+        }));
+        stream.fallbackJobId = jobId;
+        return { text: '', fallbackJobId: jobId };
       }
       if (params.command !== 'audio') throw new Error('Unknown voice stream command');
       const audio = requiredString(params, 'audioBase64');
-      if (audio.length > Math.ceil(MAX_STREAM_CHUNK_BYTES / 3) * 4 || decodeBase64Audio(audio).length > MAX_STREAM_CHUNK_BYTES) throw new Error('Voice stream audio chunk is too large');
+      if (audio.length > Math.ceil(MAX_STREAM_CHUNK_BYTES / 3) * 4) throw new Error('Voice stream audio chunk is too large');
+      const chunk = decodeBase64Audio(audio);
+      if (chunk.length > MAX_STREAM_CHUNK_BYTES || chunk.length % 2) throw new Error('Invalid voice stream audio chunk');
+      if (stream.turnBytes + chunk.length > MAX_STREAM_TURN_BYTES) throw new Error('Voice stream turn is too long');
       refreshStreamExpiry(stream);
-      return stream.process.request({ command: 'audio', audio });
+      const result = await stream.process.request({ command: 'audio', audio });
+      if (result?.accepted === true && !stream.process.closed) {
+        stream.turnChunks.push(chunk);
+        stream.turnBytes += chunk.length;
+      }
+      return result;
     });
 
     ctx.actions.register('voice-transcribe', async (params, auth) => {

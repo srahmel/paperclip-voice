@@ -20,6 +20,7 @@ export async function startLocalConversation(options: {
   onLevel: (rms: number) => void;
   onStartSpeech: () => void;
   onEndSpeech: () => void;
+  recoverText: (jobId: string) => Promise<string>;
   onText: (text: string) => void;
   onError: (error: unknown) => void;
 }): Promise<() => void> {
@@ -49,7 +50,7 @@ export async function startLocalConversation(options: {
   let consecutiveLoud = 0;
   const queue: ArrayBuffer[] = [];
   const preroll: ArrayBuffer[] = [];
-  const detectsSpeech = createSpeechDetector(options.threshold);
+  let detectsSpeech = createSpeechDetector(options.threshold);
 
   const stop = () => {
     if (stopped) return;
@@ -83,11 +84,16 @@ export async function startLocalConversation(options: {
         if (result?.accepted !== true) throw new Error('Ein Audioblock konnte nicht verarbeitet werden.');
       }
       if (!stopped && finishing) {
-        const result = await send('finish') as { text?: string };
+        const result = await send('finish') as { text?: string; fallbackJobId?: string };
         if (typeof result?.text !== 'string') throw new Error('Die Live-Erkennung hat kein gültiges Ergebnis geliefert.');
+        const firstText = result.text.trim();
+        const text = !firstText && typeof result.fallbackJobId === 'string' && options.active()
+          ? (await options.recoverText(result.fallbackJobId).catch(() => '')).trim()
+          : firstText;
         if (!stopped && options.active()) {
           finishing = false;
-          options.onText(result.text.trim());
+          if (!text) detectsSpeech = createSpeechDetector(options.threshold);
+          options.onText(text);
         }
       }
     } catch (error) { fail(error); }

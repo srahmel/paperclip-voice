@@ -4,6 +4,24 @@ import { join } from 'node:path';
 import { audioWorkerEnvironment, packageRoot } from './local-python.mjs';
 
 export const MAX_STREAM_CHUNK_BYTES = 32_000;
+export const MAX_STREAM_TURN_BYTES = 30 * MAX_STREAM_CHUNK_BYTES;
+
+export function streamTurnWav(chunks, byteLength) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + byteLength, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16_000, 24);
+  header.writeUInt32LE(32_000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(byteLength, 40);
+  return Buffer.concat([header, ...chunks], 44 + byteLength);
+}
 
 export function configuredStream(config) {
   return config.backend === 'python' && Boolean(config.moonshinePython && config.moonshineModelDir);

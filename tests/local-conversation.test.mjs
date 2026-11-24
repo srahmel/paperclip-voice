@@ -9,6 +9,7 @@ test('uploads speech in bounded chunks before the turn ends and reuses the strea
   const updates = [];
   const texts = [];
   const levels = [];
+  const fallbackJobs = [];
   const previousNode = globalThis.AudioWorkletNode;
   globalThis.AudioWorkletNode = class {
     port = { close() {} };
@@ -37,10 +38,11 @@ test('uploads speech in bounded chunks before the turn ends and reuses the strea
           assert.ok(Buffer.from(request.audioBase64, 'base64').length <= 12800);
           return { accepted: true };
         }
-        return { text: 'Testfrage' };
+        return texts.length ? { text: '', fallbackJobId: 'whisper-fallback' } : { text: 'Testfrage' };
       },
       active: () => active, canListen: () => true, threshold: () => DEFAULT_SPEECH_LEVEL,
       onLevel: rms => levels.push(rms),
+      recoverText: async jobId => { fallbackJobs.push(jobId); return 'Zweite Testfrage'; },
       onStartSpeech() {}, onEndSpeech() {}, onText: text => texts.push(text),
       onError: error => assert.fail(error),
     });
@@ -58,6 +60,8 @@ test('uploads speech in bounded chunks before the turn ends and reuses the strea
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(texts.length, turn);
     }
+    assert.deepEqual(texts, ['Testfrage', 'Zweite Testfrage']);
+    assert.deepEqual(fallbackJobs, ['whisper-fallback']);
     active = false;
     stop();
     assert.equal(updates.at(-1), 'stop');

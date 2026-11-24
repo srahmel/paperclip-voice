@@ -174,7 +174,13 @@ export const DEFAULT_SPEECH_LEVEL = 0.008;
 
 export function createSpeechDetector(minimumLevel) {
   let noiseFloor = 0.002;
+  let calibrationFrames = 0;
   return (rms, speaking = false) => {
+    if (calibrationFrames < 3) {
+      noiseFloor = calibrationFrames === 0 ? rms : Math.min(noiseFloor, rms);
+      calibrationFrames++;
+      return false;
+    }
     const threshold = Math.max(minimumLevel(), noiseFloor * 1.8 + 0.002);
     const loud = rms >= threshold * (speaking ? 0.8 : 1);
     if (!speaking && !loud) noiseFloor += (rms - noiseFloor) * 0.2;
