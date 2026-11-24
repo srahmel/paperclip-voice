@@ -1,4 +1,5 @@
 import { registerVoiceCapture } from './voice-capture-worklet.js';
+import { createSpeechDetector } from '../lib/voice-utils.mjs';
 
 type Frame = { data: ArrayBuffer; rms: number };
 type Action = (params: Record<string, unknown>) => Promise<unknown>;
@@ -16,6 +17,7 @@ export async function startLocalConversation(options: {
   active: () => boolean;
   canListen: () => boolean;
   threshold: () => number;
+  onLevel: (rms: number) => void;
   onStartSpeech: () => void;
   onEndSpeech: () => void;
   onText: (text: string) => void;
@@ -36,6 +38,8 @@ export async function startLocalConversation(options: {
 
   let node: AudioWorkletNode | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let inputWatch: ReturnType<typeof setInterval> | undefined;
+  let lastFrameAt = performance.now();
   let stopped = false;
   let sending = false;
   let speaking = false;
@@ -45,11 +49,13 @@ export async function startLocalConversation(options: {
   let consecutiveLoud = 0;
   const queue: ArrayBuffer[] = [];
   const preroll: ArrayBuffer[] = [];
+  const detectsSpeech = createSpeechDetector(options.threshold);
 
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(heartbeat);
+    clearInterval(inputWatch);
     if (node) {
       try { input.disconnect(node); } catch { /* The input may not have connected. */ }
       node.disconnect();
@@ -89,12 +95,14 @@ export async function startLocalConversation(options: {
   }
 
   function capture({ data, rms }: Frame) {
+    lastFrameAt = performance.now();
     if (stopped || finishing || !options.active() || !options.canListen()) {
       preroll.length = 0;
       consecutiveLoud = 0;
       return;
     }
-    const loud = rms >= options.threshold();
+    options.onLevel(rms);
+    const loud = detectsSpeech(rms, speaking);
     if (!speaking) {
       preroll.push(data);
       if (preroll.length > 3) preroll.shift();
@@ -121,12 +129,15 @@ export async function startLocalConversation(options: {
   }
 
   try {
-    node = new AudioWorkletNode(context, 'paperclip-voice-capture', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
+    node = new AudioWorkletNode(context, 'paperclip-voice-capture', { channelCount: 1, channelCountMode: 'explicit' });
     node.port.onmessage = event => capture(event.data as Frame);
     node.onprocessorerror = () => fail(new Error('Die Mikrofonaufnahme wurde unterbrochen.'));
     input.connect(node);
     // The worklet deliberately emits silence while the graph pulls microphone frames.
     node.connect(context.destination);
+    inputWatch = setInterval(() => {
+      if (performance.now() - lastFrameAt > 4000) fail(new Error('Das Mikrofon liefert keine Audiodaten. Prüfe das ausgewählte Mikrofon und starte erneut.'));
+    }, 1000);
     heartbeat = setInterval(() => { if (!sending) void send('keepalive').catch(fail); }, 30_000);
   } catch (error) { stop(); throw error; }
   return stop;

@@ -1,16 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startLocalConversation } from '../src/ui/local-conversation.ts';
+import { DEFAULT_SPEECH_LEVEL } from '../src/lib/voice-utils.mjs';
 
 test('uploads speech in bounded chunks before the turn ends and reuses the stream', async () => {
   let node;
   let active = true;
   const updates = [];
   const texts = [];
+  const levels = [];
   const previousNode = globalThis.AudioWorkletNode;
   globalThis.AudioWorkletNode = class {
     port = { close() {} };
-    constructor() { node = this; }
+    constructor(_context, _name, options) {
+      assert.equal(options.channelCount, 1);
+      assert.equal(options.channelCountMode, 'explicit');
+      node = this;
+    }
     connect() {}
     disconnect() {}
   };
@@ -33,15 +39,19 @@ test('uploads speech in bounded chunks before the turn ends and reuses the strea
         }
         return { text: 'Testfrage' };
       },
-      active: () => active, canListen: () => true, threshold: () => 0.035,
+      active: () => active, canListen: () => true, threshold: () => DEFAULT_SPEECH_LEVEL,
+      onLevel: rms => levels.push(rms),
       onStartSpeech() {}, onEndSpeech() {}, onText: text => texts.push(text),
       onError: error => assert.fail(error),
     });
     const emit = rms => node.port.onmessage({ data: { data: new ArrayBuffer(3200), rms } });
     for (let index = 0; index < 12; index++) emit(0.005);
     assert.deepEqual(updates, []);
+    assert.equal(levels.at(-1), 0.005);
     for (let turn = 1; turn <= 2; turn++) {
-      for (let index = 0; index < 7; index++) emit(0.09);
+      // The former 0.035 threshold dropped every frame of this quiet turn.
+      for (let index = 0; index < 7; index++) emit(0.018);
+      assert.equal(levels.at(-1), 0.018);
       assert.ok(updates.includes('audio'));
       assert.equal(updates.filter(command => command === 'finish').length, turn - 1);
       for (let index = 0; index < 6; index++) emit(0.005);

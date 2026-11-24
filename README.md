@@ -20,9 +20,11 @@ there is no current conversation. Navigating away stops recording and
 playback. Closing the panel, stopping or disabling the plugin releases audio
 resources and cancels pending audio jobs.
 
-- Start the microphone, speak, then pause. By default, review and edit the text
-  before selecting **Transkript absenden**.
-- Enable automatic submission only for a continuing voice conversation.
+- Choose **Freisprechen starten (sendet automatisch)** for the German hands-free
+  pilot, then speak and pause. The panel indicates when speech is detected.
+- Choose **Aufnahme mit Vorschau starten** to review and edit the text before
+  selecting **Transkript absenden**. Automatic submission is also available
+  in **Optionen** for an ongoing conversation.
 - The concise-answer instruction stays visible in each submitted comment.
 - Existing agent answers stay in Paperclip and can be spoken with local Piper.
 - Under **Optionen**, import a recording for transcription and text review.

@@ -149,8 +149,19 @@ export function isAgentComment(comment) {
 }
 
 /** VAD state helper; thresholds are dimensionless RMS of WebAudio float samples. */
-export function vadDecision({ rms, elapsedMs, silenceMs, spoke, threshold = 0.025, minMs = 450, endSilenceMs = 1250, maxMs = 26000 }) {
-  const speech = rms >= threshold;
+export const DEFAULT_SPEECH_LEVEL = 0.008;
+
+export function createSpeechDetector(minimumLevel) {
+  let noiseFloor = 0.002;
+  return (rms, speaking = false) => {
+    const threshold = Math.max(minimumLevel(), noiseFloor * 1.8 + 0.002);
+    const loud = rms >= threshold * (speaking ? 0.8 : 1);
+    if (!speaking && !loud) noiseFloor += (rms - noiseFloor) * 0.2;
+    return loud;
+  };
+}
+
+export function vadDecision({ rms = 0, elapsedMs, silenceMs, spoke, threshold = 0.025, speech = rms >= threshold, minMs = 450, endSilenceMs = 1250, maxMs = 26000 }) {
   const nextSpoke = spoke || speech;
   const nextSilence = speech ? 0 : (spoke ? silenceMs : 0);
   const stop = elapsedMs >= maxMs || (elapsedMs >= minMs && nextSpoke && nextSilence >= endSilenceMs);
