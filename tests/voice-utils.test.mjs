@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import manifest from '../src/manifest.ts';
 import {
   assertLocalVoiceboxUrl, parseConfig, voiceForLanguage, decodeBase64Audio, normaliseAudioMime,
-  cleanSpokenText, voiceMessage, routeTarget, isAgentComment, vadDecision,
+  cleanSpokenText, voiceMessage, routeTarget, rememberVoiceAgent, voiceSessionTarget, isAgentComment, vadDecision,
 } from '../src/lib/voice-utils.mjs';
 
 test('configuration defaults to local German speech', () => {
@@ -93,6 +93,19 @@ test('route target resolves native agent chat and issue destinations', () => {
   const id = '2ab1581c-f210-41e8-86f0-a8d271b8d012';
   assert.deepEqual(routeTarget(`/issues/${id}`), { kind: 'issue', ref: id });
   assert.equal(routeTarget('/chats'), null);
+});
+
+test('the last explicitly selected voice agent is restored by company for the browser session', () => {
+  const data = new Map();
+  const storage = { getItem: key => data.get(key), setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+  rememberVoiceAgent('company-a', 'klara', storage);
+  rememberVoiceAgent('company-b', 'konrad', storage);
+  assert.deepEqual(voiceSessionTarget('/HUM/dashboard', 'company-a', undefined, storage), { kind: 'chat', ref: 'klara' });
+  assert.deepEqual(voiceSessionTarget('/OTHER/dashboard', 'company-b', undefined, storage), { kind: 'chat', ref: 'konrad' });
+  assert.deepEqual(voiceSessionTarget('/HUM/issues/HUM-21', 'company-a', undefined, storage), { kind: 'issue', ref: 'HUM-21' });
+  assert.deepEqual(voiceSessionTarget('/HUM/dashboard', 'company-a', 'explicit-task', storage), { kind: 'issue', ref: 'explicit-task' });
+  rememberVoiceAgent('company-a', undefined, storage);
+  assert.deepEqual(voiceSessionTarget('/HUM/chats/vera', 'company-a', undefined, storage), { kind: 'chat', ref: 'vera' });
 });
 
 test('only agent-authored non-deleted comments are audible', () => {

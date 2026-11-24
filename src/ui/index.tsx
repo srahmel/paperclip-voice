@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useHostLocation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
-import { createSpeechDetector, DEFAULT_SPEECH_LEVEL, routeTarget, vadDecision, voiceMessage, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
+import { createSpeechDetector, DEFAULT_SPEECH_LEVEL, rememberVoiceAgent, routeTarget, vadDecision, voiceMessage, voiceSessionTarget, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
 import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeAgentChat, listVoiceTargets, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 import { appendDictation, useVoiceMounts, type DraftBinding } from './composer-mounts';
@@ -127,9 +127,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const seenCommentIdsRef = useRef<Set<string>>(new Set());
   const activeIssueIdRef = useRef<string | null>(null);
   const localConversationRef = useRef<(() => void) | null>(null);
+  const handsFreeRef = useRef(false);
   const voiceTurnRef = useRef(0);
   const waitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const waitAudioRef = useRef<AudioBuffer | null>(null);
+  const waitAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
 
   const setPhase = (next: Phase) => { phaseRef.current = next; setPhaseState(next); };
   const setMode = (next: typeof mode) => { modeRef.current = next; setModeState(next); };
@@ -143,6 +144,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     sessionPathRef.current = null;
     localConversationRef.current?.();
     localConversationRef.current = null;
+    handsFreeRef.current = false;
     if (waitTimerRef.current) clearTimeout(waitTimerRef.current);
     waitTimerRef.current = null;
     waitAudioRef.current = null;
@@ -175,7 +177,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     window.addEventListener('pagehide', teardown);
     return () => { window.removeEventListener('pagehide', teardown); teardown(); };
   }, [teardown]);
-  useEffect(() => { teardown(); setTarget(routeTarget(window.location.pathname) as Target | null); }, [companyId, teardown]);
+  useEffect(() => { teardown(); setTargetOptions([]); setTarget(routeTarget(window.location.pathname) as Target | null); }, [companyId, teardown]);
 
   useEffect(() => {
     setListeningHint(false);
@@ -188,7 +190,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       if (detail?.companyId !== companyId) return;
-      const next = typeof detail.issueId === 'string' ? { kind: 'issue' as const, ref: detail.issueId } : routeTarget(pathname) as Target | null;
+      const next = voiceSessionTarget(pathname, companyId, typeof detail.issueId === 'string' ? detail.issueId : undefined) as Target | null;
       draftRef.current = null; setMode('conversation');
       teardown(); setTarget(next); setError(null); setOpened(true);
     };
@@ -250,6 +252,19 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     waitTimerRef.current = null;
   }
 
+  function scheduleWaitHint(epoch: number) {
+    clearWaitTimer();
+    const turn = voiceTurnRef.current;
+    const pendingAudio = waitAudioRef.current;
+    waitTimerRef.current = setTimeout(() => {
+      waitTimerRef.current = null;
+      const current = () => active(epoch) && voiceTurnRef.current === turn && ['transcribing', 'sending', 'waiting'].includes(phaseRef.current);
+      void pendingAudio?.then(audio => {
+        if (audio && current()) return playDecoded(audio, current);
+      }).catch(() => undefined);
+    }, 1400);
+  }
+
   async function audioJob<T>(action: (params: Record<string, unknown>) => Promise<unknown>, params: Record<string, unknown>, epoch: number, turn?: number): Promise<T> {
     const result = await waitForVoiceJob(
       (payload: Record<string, unknown>) => action(payload),
@@ -286,14 +301,14 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch, turn);
         if (!current()) return;
-        if (localConversationRef.current || autoContinueRef.current) await startCapture(epoch);
+        if (handsFreeRef.current || autoContinueRef.current) await startCapture(epoch);
         else setPhase('ready');
         return;
       }
     }
     if (current() && phaseRef.current === 'waiting') {
       setError('Noch keine Agentenantwort. Die Aufgabe läuft in Paperclip weiter; neue Agentenmeldungen werden weiter beobachtet.');
-      if (localConversationRef.current || autoContinueRef.current) await startCapture(epoch);
+      if (handsFreeRef.current || autoContinueRef.current) await startCapture(epoch);
       else setPhase('ready');
     }
   }
@@ -329,7 +344,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     // Imported recordings are a single dictation, with no live microphone or
     // playback context. Finish instead of entering the continuous voice loop.
     if (!streamRef.current) { teardown(); setPhase('submitted'); return; }
-    if (localConversationRef.current) { await waitForAgent(issue, epoch); return; }
+    if (handsFreeRef.current) { await waitForAgent(issue, epoch); return; }
     try { await sayStatus('submitted', epoch); }
     catch { throw new Error('Nachricht wurde gesendet, aber die Sprachausgabe ist ausgefallen. Bitte den Chat prüfen.'); }
     if (active(epoch)) await waitForAgent(issue, epoch);
@@ -340,18 +355,20 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     try {
       setPhase('transcribing');
       if (blob.size < 500 || blob.size > 2 * 1024 * 1024) throw new Error('Audioaufnahme ist zu kurz oder zu groß (max. 2 MiB).');
+      if (handsFreeRef.current) scheduleWaitHint(epoch);
       const audioBase64 = await audioBlobToBase64(blob);
       if (!active(epoch)) return;
       const transcription = await audioJob<{ text: string }>(transcribe, { audioBase64, mimeType: blob.type || 'audio/webm', language }, epoch);
       const text = transcription.text?.trim() ?? '';
       if (!active(epoch)) return;
       if (!text) {
+        clearWaitTimer();
         await sayStatus('no_speech', epoch);
         if (active(epoch)) await startCapture(epoch);
         return;
       }
       setLastTranscript(text);
-      if (modeRef.current === 'dictation' || !autoSendRef.current) { setPhase('review'); return; }
+      if (modeRef.current === 'dictation' || !(handsFreeRef.current || autoSendRef.current)) { setPhase('review'); return; }
       await submitTranscript(text, epoch);
     } catch (cause) {
       if (active(epoch)) { teardown(); setError(friendlyError(cause)); setPhase('error'); }
@@ -391,7 +408,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           setLastReply(latest.body ?? '');
           await playAudio(spoken, epoch, turn);
           if (!current()) return;
-          if (localConversationRef.current || autoContinueRef.current) await startCapture(epoch);
+          if (handsFreeRef.current || autoContinueRef.current) await startCapture(epoch);
           else setPhase('ready');
         } catch (cause) {
           if (current()) { teardown(); setError(`Antwort-Beobachtung: ${friendlyError(cause)}`); setPhase('error'); }
@@ -454,7 +471,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       lastTick = now;
       const speech = detectsSpeech(rms, spoke);
       const next = vadDecision({ speech, elapsedMs: now - started, silenceMs: silenceMs + dt, spoke });
-      if (!spoke && next.spoke) setPhase('capturing');
+      if (!spoke && next.spoke) {
+        voiceTurnRef.current++;
+        clearWaitTimer();
+        setError(null);
+        setPhase('capturing');
+      }
       spoke = next.spoke;
       utteranceStartedRef.current = spoke;
       silenceMs = next.silenceMs;
@@ -490,9 +512,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   async function startSession(handsFree = false): Promise<void> {
     if (!['off', 'error', 'submitted'].includes(phaseRef.current)) return;
     if (!companyId || (!targetRef.current && !draftRef.current)) { setError('Wähle zuerst einen Chat oder eine Aufgabe.'); return; }
-    if (!navigator.mediaDevices?.getUserMedia || (!handsFree && !window.MediaRecorder)) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
+    const canStream = handsFree && language === 'de' && health.data?.streamingReady === true && typeof AudioWorkletNode !== 'undefined';
+    if (!navigator.mediaDevices?.getUserMedia || (!canStream && !window.MediaRecorder)) { setError('Dieser Browser unterstützt keine sichere Audioaufnahme. HTTPS/localhost erforderlich.'); return; }
     if (health.data?.ready === false) { setError('Der lokale Audiodienst ist noch nicht bereit. Bitte die Voice-Plugin-Einstellungen prüfen.'); return; }
     teardown();
+    handsFreeRef.current = handsFree;
     setError(null);
     setLastReply('');
     setLastTranscript('');
@@ -518,15 +542,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       }, { once: true });
       const input = ctx.createMediaStreamSource(stream);
       if (handsFree) {
+        waitAudioRef.current = audioJob<AudioResult>(speakStatus, { status: 'waiting', language }, epoch).then(result => {
+          if (!active(epoch) || !result.audioBase64) return null;
+          return ctx.decodeAudioData(audioBase64ToBuffer(result.audioBase64));
+        }).catch(() => null);
+      }
+      if (canStream && ctx.audioWorklet && ctx.sampleRate >= 16_000) {
         const onError = (cause: unknown) => {
           if (active(epoch)) { teardown(); setError(friendlyError(cause)); setPhase('error'); }
         };
-        const preload = audioJob<AudioResult>(speakStatus, { status: 'waiting', language }, epoch).then(async result => {
-          if (!active(epoch) || !result.audioBase64) return;
-          const audio = await ctx.decodeAudioData(audioBase64ToBuffer(result.audioBase64));
-          if (active(epoch)) waitAudioRef.current = audio;
-        });
-        void preload.catch(() => undefined);
         const stop = await startLocalConversation({
           context: ctx, input, companyId, start: startStream, update: updateStream,
           active: () => active(epoch),
@@ -543,13 +567,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           onEndSpeech: () => {
             utteranceStartedRef.current = false;
             setPhase('transcribing');
-            const turn = voiceTurnRef.current;
-            waitTimerRef.current = setTimeout(() => {
-              waitTimerRef.current = null;
-              const current = () => active(epoch) && voiceTurnRef.current === turn && ['transcribing', 'sending', 'waiting'].includes(phaseRef.current);
-              const audio = waitAudioRef.current;
-              if (audio && current()) void playDecoded(audio, current).catch(() => undefined);
-            }, 1400);
+            scheduleWaitHint(epoch);
           },
           onText: text => {
             const turn = voiceTurnRef.current;
@@ -567,12 +585,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         });
         if (!active(epoch)) { stop(); return; }
         localConversationRef.current = stop;
-        await preload;
-        if (!active(epoch)) return;
-        if (!waitAudioRef.current) throw new Error('Die lokale Warteansage konnte nicht vorbereitet werden.');
         await startCapture(epoch);
         return;
       }
+      if (!window.MediaRecorder) throw new Error('Dieser Browser unterstützt keine Audioaufnahme für diese Sprache.');
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
       input.connect(analyser);
@@ -615,7 +631,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   const targetLabel = mode === 'dictation' ? 'Diktat für diese Eingabe – kein automatischer Versand' : target ? (targetOptions.find(option => option.kind === target.kind && option.ref === target.ref)?.label ?? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : 'Ausgewählter Chat')) : 'Kein Ziel';
   const canStart = phase === 'off' || phase === 'error' || phase === 'submitted';
-  const canStartHandsFree = canStart && mode === 'conversation' && language === 'de' && health.data?.streamingReady;
+  const canStartHandsFree = canStart && mode === 'conversation' && health.data?.ready === true;
+  const handsFreeActive = handsFreeRef.current;
   const iconButton: CSSProperties = { width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: 8, cursor: 'pointer' };
   const panelHost = mode === 'dictation' ? draftRef.current?.root.closest<HTMLElement>('[role="dialog"]') : null;
   const panel = opened && <section id="paperclip-voice-dialog" className="pc-voice-panel" style={{ ...P.panel, ...(panelHost ? { position: 'relative', right: 'auto', bottom: 'auto', margin: 12, width: 'auto', maxWidth: 'none', maxHeight: '60dvh', flexShrink: 1 } : {}) }} aria-label={mode === 'dictation' ? 'Diktat' : mode === 'read' ? 'Antwort vorlesen' : 'Sprachmodus'} aria-live="polite">
@@ -637,6 +654,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <p style={P.muted}>Aktueller Chat: {targetLabel}</p>
       {mode === 'conversation' && <label>Chat oder Aufgabe<select aria-label="Chat oder Aufgabe" style={P.field} disabled={!canStart} value={target ? `${target.kind}:${target.ref}` : ''} onChange={event => {
         const selected = targetOptions.find(option => `${option.kind}:${option.ref}` === event.target.value);
+        if (selected?.kind === 'chat' || !selected) rememberVoiceAgent(companyId, selected?.ref);
         setTarget(selected ?? null);
       }}><option value="">Bitte wählen …</option>
         {target && !targetOptions.some(option => option.kind === target.kind && option.ref === target.ref) && <option value={`${target.kind}:${target.ref}`}>{targetLabel}</option>}
@@ -644,9 +662,9 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       </select></label>}
       {mode !== 'read' && <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
       <summary style={{ cursor: 'pointer', padding: '5px 0' }}>Optionen</summary>
-      {mode === 'conversation' && <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={autoSend} onChange={(event) => { autoSendRef.current = event.target.checked; setAutoSend(event.target.checked); }} /> Automatisch an Paperclip senden</label>}
+      {mode === 'conversation' && <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={handsFreeActive || autoSend} disabled={handsFreeActive} onChange={(event) => { autoSendRef.current = event.target.checked; setAutoSend(event.target.checked); }} /> Automatisch an Paperclip senden</label>}
       {mode === 'conversation' && <>
-        <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={autoContinue} onChange={(event) => { autoContinueRef.current = event.target.checked; setAutoContinue(event.target.checked); }} /> Nach Antwort weiter zuhören</label>
+        <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={handsFreeActive || autoContinue} disabled={handsFreeActive} onChange={(event) => { autoContinueRef.current = event.target.checked; setAutoContinue(event.target.checked); }} /> Nach Antwort weiter zuhören</label>
         <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={conciseReply} onChange={(event) => { conciseReplyRef.current = event.target.checked; setConciseReply(event.target.checked); }} /> Knappe Antworten anfordern (sichtbar im Chat)</label>
       </>}
       <label style={P.muted} htmlFor="voice-threshold">Sprechschwelle (links für leise Stimmen)</label>

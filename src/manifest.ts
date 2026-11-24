@@ -6,7 +6,7 @@ const advanced = { 'x-paperclip-advanced': true };
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.3.4',
+  version: '0.3.5',
   displayName: 'Paperclip Voice (Local)',
   description: 'Talk with existing Paperclip agents using local Whisper, Piper and optional German streaming speech recognition.',
   author: 'paperclip-voice contributors',

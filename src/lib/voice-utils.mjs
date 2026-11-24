@@ -144,6 +144,27 @@ export function routeTarget(pathname) {
   return null;
 }
 
+export function voiceSessionTarget(pathname, companyId, issueId, storage = undefined) {
+  if (issueId) return { kind: 'issue', ref: issueId };
+  const route = routeTarget(pathname);
+  if (route?.kind === 'issue' || !companyId) return route;
+  try {
+    const agent = (storage ?? globalThis.sessionStorage).getItem(`paperclip-voice:last-agent:${companyId}`);
+    if (agent && /^[a-z0-9_-]{1,128}$/i.test(agent)) return { kind: 'chat', ref: agent };
+  } catch { /* The browser may block session storage. */ }
+  return route;
+}
+
+export function rememberVoiceAgent(companyId, agentRef, storage = undefined) {
+  if (!companyId) return;
+  const key = `paperclip-voice:last-agent:${companyId}`;
+  try {
+    const session = storage ?? globalThis.sessionStorage;
+    if (agentRef) session.setItem(key, agentRef);
+    else session.removeItem(key);
+  } catch { /* The browser may block session storage. */ }
+}
+
 export function isAgentComment(comment) {
   return Boolean(comment && (comment.authorAgentId || comment.authorType === 'agent') && !comment.deletedAt && typeof comment.body === 'string' && comment.body.trim());
 }

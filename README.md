@@ -16,12 +16,16 @@ reply; reading never creates a new conversation.
 
 For a continuing voice conversation, select **Voice mode** directly below
 **Chat** in the left navigation. Choose an agent chat or a recent task when
-there is no current conversation. Navigating away stops recording and
+there is no current conversation. Voice remembers the last selected agent for
+each company in the current browser tab. Opening Voice from a task uses that
+task. Navigating away stops recording and
 playback. Closing the panel, stopping or disabling the plugin releases audio
 resources and cancels pending audio jobs.
 
-- Choose **Freisprechen starten (sendet automatisch)** for the German hands-free
-  pilot, then speak and pause. The panel indicates when speech is detected.
+- Choose **Freisprechen starten (sendet automatisch)**, then speak and pause.
+  German can use streaming Moonshine. English, Dutch and Norwegian Bokmål use
+  local Whisper after each pause and then resume listening after the reply.
+  The panel shows the microphone level and indicates when speech is detected.
 - Choose **Aufnahme mit Vorschau starten** to review and edit the text before
   selecting **Transkript absenden**. Automatic submission is also available
   in **Optionen** for an ongoing conversation.
@@ -116,18 +120,17 @@ Moonshine's 0.1.6 Python downloader prints a generic Community License notice
 for every language other than English. The project's [0.1.6 release license][moonshine-license]
 and [model list][moonshine-models] identify German Small Streaming as MIT-licensed.
 
-The plugin shows **Freisprechen starten (sendet automatisch)** in German for a
-configured local Python backend. Select an accessible chat or task before
-starting. The browser sends speech in chunks over authenticated Paperclip plugin
-actions. An in-memory recognizer stays active between turns, and a preloaded
-Piper prompt plays if the turn needs more time. Speaking again stops playback and
-begins a new turn. Agent work already submitted to Paperclip continues.
+With German selected and Moonshine configured, hands-free mode sends speech in
+chunks over authenticated Paperclip plugin actions. An in-memory recognizer
+stays active between turns. In all four languages a Piper prompt plays if the
+turn needs more time. The microphone resumes after the spoken reply.
 
 The runtime reads preinstalled model files and has no separate network listener,
 cloud speech service, or audio recording store. The accepted text is posted as
 a normal Paperclip comment and follows the assigned agent's existing execution
-and data processing configuration. The browser requires a secure origin and
-AudioWorklet support. The pilot is browser-based, so validate background capture,
+and data processing configuration. The browser requires a secure origin.
+Streaming requires AudioWorklet support, and recording with local Whisper uses
+MediaRecorder. The pilot is browser-based, so validate background capture,
 Bluetooth, road noise, and screen lock on the target device before mobile use.
 
 [moonshine-license]: https://github.com/moonshine-ai/moonshine/blob/v0.1.6/docs/license.md
