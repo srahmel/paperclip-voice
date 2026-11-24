@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useHostLocation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
-import { routeTarget, vadDecision, voiceMessage } from '../lib/voice-utils.mjs';
+import { routeTarget, vadDecision, voiceMessage, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
 import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeAgentChat, listVoiceTargets, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 import { appendDictation, useVoiceMounts, type DraftBinding } from './composer-mounts';
@@ -71,7 +71,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const cancel = usePluginAction('voice-cancel');
   const startStream = usePluginAction('voice-stream-start');
   const updateStream = usePluginAction('voice-stream-update');
-  const health = usePluginData<{ ready: boolean; streamingReady?: boolean }>('voice-health', { companyId });
+  type VoiceLanguage = keyof typeof VOICE_LANGUAGES;
+  const health = usePluginData<{ ready: boolean; streamingReady?: boolean; language?: VoiceLanguage }>('voice-health', { companyId });
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
@@ -95,7 +96,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const thresholdRef = useRef(0.035);
   const [conciseReply, setConciseReply] = useState(true);
   const conciseReplyRef = useRef(true);
-  const [language, setLanguage] = useState<'de' | 'en'>('de');
+  const [languageChoice, setLanguageChoice] = useState<{ companyId: typeof companyId; language: VoiceLanguage }>();
+  const language = (languageChoice?.companyId === companyId ? languageChoice?.language : undefined) ?? health.data?.language ?? 'de';
 
   const sessionActiveRef = useRef(false);
   const epochRef = useRef(0); // invalidates asynchronous work on stop/company change
@@ -295,7 +297,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     for (const c of before) seenCommentIdsRef.current.add(c.id);
     if (!active(epoch)) return;
     const clientRequestId = crypto.randomUUID();
-    const message = voiceMessage(text, conciseReplyRef.current);
+    const message = voiceMessage(text, conciseReplyRef.current, language);
     // Native authenticated Paperclip user operation, not a parallel plugin agent chat.
     // 5xx or transport failure is an UNKNOWN outcome: never retry automatically.
     try { await postNativeComment(issue, message, clientRequestId); }
@@ -587,8 +589,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       <p style={{ ...P.muted, margin: '12px 0' }} role="status">{({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: 'Ich höre zu …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}</p>
       <p style={P.muted}>Audio: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Lokaler Audiodienst nicht erreichbar'}</p>
       <label htmlFor="voice-language">Sprache</label>
-      <select id="voice-language" style={P.field} value={language} disabled={!canStart} onChange={(event) => setLanguage(event.target.value as 'de' | 'en')}>
-        <option value="de">Deutsch</option><option value="en">English</option>
+      <select id="voice-language" style={P.field} value={language} disabled={!canStart} onChange={(event) => setLanguageChoice({ companyId, language: event.target.value as VoiceLanguage })}>
+        {Object.entries(VOICE_LANGUAGES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
       <p style={P.muted}>Aktueller Chat: {targetLabel}</p>
       {mode === 'conversation' && <label>Chat oder Aufgabe<select aria-label="Chat oder Aufgabe" style={P.field} disabled={!canStart} value={target ? `${target.kind}:${target.ref}` : ''} onChange={event => {

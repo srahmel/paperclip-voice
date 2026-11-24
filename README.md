@@ -77,10 +77,21 @@ Existing Windows setup helpers are in `dictation/`. Model/Python installation is
 an explicit deployment step. Opening Voice does not download models. Whisper,
 Piper and voices retain their separate licenses.
 
-Choose **Thorsten** or **Kerstin** in **German voice** under the plugin's
-configuration. **Use saved voice ID** keeps a previously configured Piper voice
-or defaults to Thorsten. The Windows Piper setup helper installs both presets.
-On an existing host, install any missing model before selecting it.
+In **Paperclip Voice (Local) → Configuration**, choose a Piper voice for each
+language. **Default language** sets the initial selection in **Sprachmodus**,
+where you can switch languages for dictation and spoken replies.
+
+| Language | Voices |
+| --- | --- |
+| German | Thorsten, Kerstin, or **Use saved voice ID** |
+| English | Lessac (US), Cori (UK) |
+| Dutch | Alex (Netherlands), Nathalie (Belgium) |
+| Norwegian Bokmål | Talesyntese, NVCC |
+
+**Use saved voice ID** preserves the existing German Piper voice or defaults
+to Thorsten. The Windows Piper setup helper installs the model and configuration
+file for every preset. Install missing models before selecting them on an
+existing host. The Moonshine hands-free pilot uses a German streaming model.
 
 The optional `voicebox` backend supports an existing loopback service. The old
 Docker recipe is not a prerequisite: its upstream image rejected anonymous

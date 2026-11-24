@@ -39,6 +39,6 @@ export async function voiceboxHealth({ baseUrl, doFetch = fetch }) {
   return data?.status === 'ok';
 }
 
-export function spokenComment(body, maxSpokenChars) {
-  return cleanSpokenText(body, maxSpokenChars);
+export function spokenComment(body, maxSpokenChars, language) {
+  return cleanSpokenText(body, maxSpokenChars, language);
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import manifest from '../src/manifest.ts';
 import {
-  assertLocalVoiceboxUrl, parseConfig, decodeBase64Audio, normaliseAudioMime,
+  assertLocalVoiceboxUrl, parseConfig, voiceForLanguage, decodeBase64Audio, normaliseAudioMime,
   cleanSpokenText, voiceMessage, routeTarget, isAgentComment, vadDecision,
 } from '../src/lib/voice-utils.mjs';
 
@@ -34,6 +34,21 @@ test('rejects remote or potentially unsafe backend URLs', () => {
   assert.equal(assertLocalVoiceboxUrl('http://localhost:8790'), 'http://localhost:8790');
 });
 
+test('language and voice dropdowns persist the matching local Piper selections', () => {
+  const { language, englishVoicePreset, dutchVoicePreset, norwegianVoicePreset } = manifest.instanceConfigSchema.properties;
+  assert.deepEqual(language.enum, ['de', 'en', 'nl', 'no']);
+  assert.deepEqual(englishVoicePreset.enum, ['Lessac', 'Cori']);
+  assert.deepEqual(dutchVoicePreset.enum, ['Alex', 'Nathalie']);
+  assert.deepEqual(norwegianVoicePreset.enum, ['Talesyntese', 'NVCC']);
+  const config = parseConfig({ language: 'nl', englishVoicePreset: 'Cori', dutchVoicePreset: 'Nathalie', norwegianVoicePreset: 'NVCC' });
+  assert.equal(config.language, 'nl');
+  assert.equal(voiceForLanguage(config, 'en'), 'en_GB-cori-medium');
+  assert.equal(voiceForLanguage(config, 'nl'), 'nl_BE-nathalie-medium');
+  assert.equal(voiceForLanguage(config, 'no'), 'no_NO-nvcc-medium');
+  assert.equal(voiceForLanguage(parseConfig(), 'en'), 'en_US-lessac-medium');
+  assert.throws(() => parseConfig({ dutchVoicePreset: 'Cori' }), /Invalid Dutch voice preset/);
+});
+
 test('rejects untrusted audio types and oversized/malformed payloads', () => {
   assert.equal(normaliseAudioMime('audio/webm;codecs=opus'), 'audio/webm');
   assert.throws(() => normaliseAudioMime('application/javascript'));
@@ -58,6 +73,8 @@ test('speech cleanup keeps paperclip original intact and limits spoken text', ()
 test('voice request adds a temporary visible hint only for voice turns', () => {
   assert.equal(voiceMessage('Hallo', false), 'Hallo');
   assert.match(voiceMessage('Bitte prüfe DemoApp'), /Sprachmodus/);
+  assert.match(voiceMessage('Kan du hjelpe?', true, 'no'), /norsk bokmål/);
+  assert.match(cleanSpokenText('https://example.org', 120, 'nl').text, /link in de chat/);
   assert.throws(() => voiceMessage(''));
   assert.throws(() => voiceMessage('a'.repeat(5001)));
 });

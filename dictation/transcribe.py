@@ -12,7 +12,7 @@ def main():
     if len(sys.argv) != 3:
         raise ValueError("arguments")
     language, container_format = sys.argv[1:]
-    if language not in ("auto", "de", "en"):
+    if language not in ("auto", "de", "en", "nl", "no"):
         raise ValueError("language")
     if container_format not in ("matroska", "ogg", "mov", "wav"):
         raise ValueError("format")

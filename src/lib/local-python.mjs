@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeBase64Audio, normaliseAudioMime } from './voice-utils.mjs';
+import { decodeBase64Audio, isVoiceLanguage, normaliseAudioMime } from './voice-utils.mjs';
 
 export function packageRoot() {
   let root = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +66,7 @@ export function runAudioWorker({ executable, script, args = [], input, env = {},
 export async function transcribeWithPython({ config, language, audioBase64, mimeType, signal }) {
   const r = localRuntime(config);
   const mime = normaliseAudioMime(mimeType);
-  if (!['de', 'en', 'auto'].includes(language) || !r.sttModelDir) throw new Error('Invalid transcription settings');
+  if ((!isVoiceLanguage(language) && language !== 'auto') || !r.sttModelDir) throw new Error('Invalid transcription settings');
   const format = { 'audio/webm': 'matroska', 'audio/ogg': 'ogg', 'audio/mp4': 'mov', 'audio/wav': 'wav', 'audio/x-wav': 'wav' }[mime];
   const bytes = await runAudioWorker({ executable: r.sttPython, script: r.transcriber,
     args: [language, format], input: decodeBase64Audio(audioBase64), signal,
@@ -78,7 +78,7 @@ export async function transcribeWithPython({ config, language, audioBase64, mime
 
 export async function synthesizeWithPython({ config, language, voice, speechRate, text, signal }) {
   const r = localRuntime(config);
-  if (!['de', 'en'].includes(language) || !text?.trim() || text.length > 2500 || !r.ttsModelDir) throw new Error('Invalid speech settings');
+  if (!isVoiceLanguage(language) || !text?.trim() || text.length > 2500 || !r.ttsModelDir) throw new Error('Invalid speech settings');
   const bytes = await runAudioWorker({ executable: r.ttsPython, script: r.synthesizer,
     input: JSON.stringify({ text, language, voice, speed: speechRate }), signal, timeoutMs: 90_000,
     env: { PAPERCLIP_TTS_MODEL_DIR: r.ttsModelDir, ...(r.systemRoot ? { SystemRoot: r.systemRoot, WINDIR: r.systemRoot } : {}) } });

@@ -2,7 +2,7 @@ import { localAudioReady, synthesizeWithPython, transcribeWithPython } from './l
 import { LocalSpeechStream, localStreamReady, MAX_STREAM_CHUNK_BYTES } from './lib/local-stream.mjs';
 import { randomUUID } from 'node:crypto';
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
-import { decodeBase64Audio, isAgentComment, parseConfig } from './lib/voice-utils.mjs';
+import { decodeBase64Audio, isAgentComment, isVoiceLanguage, parseConfig, voiceForLanguage } from './lib/voice-utils.mjs';
 import { spokenComment, synthesizeWithVoicebox, transcribeWithVoicebox, voiceboxHealth } from './lib/voicebox-client.mjs';
 
 type JobState = 'pending' | 'ready' | 'error';
@@ -34,6 +34,16 @@ const STATUS_MESSAGES: Record<string, Record<string, string>> = {
     waiting: 'One moment, I am checking.',
     no_speech: 'I did not understand.',
   },
+  nl: {
+    submitted: 'Verzonden.',
+    waiting: 'Een moment, ik kijk het na.',
+    no_speech: 'Ik heb het niet verstaan.',
+  },
+  no: {
+    submitted: 'Sendt.',
+    waiting: 'Et øyeblikk, jeg sjekker.',
+    no_speech: 'Jeg forsto ikke.',
+  },
 };
 
 function refreshStreamExpiry(stream: VoiceStream) {
@@ -49,7 +59,7 @@ function requiredString(params: Record<string, unknown>, name: string): string {
 }
 
 function allowedLanguage(input: unknown, fallback: string): string {
-  return input === 'de' || input === 'en' ? input : fallback;
+  return typeof input === 'string' && isVoiceLanguage(input) ? input : fallback;
 }
 
 function requireScope(
@@ -109,9 +119,9 @@ const plugin = definePlugin({
       const config = await configFor(companyId);
       try {
         const ready = config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl });
-        return { ready, streamingReady: ready && localStreamReady(config) };
+        return { ready, streamingReady: ready && localStreamReady(config), language: config.language };
       }
-      catch { return { ready: false }; }
+      catch { return { ready: false, language: config.language }; }
     });
 
     ctx.actions.register('voice-stream-start', async (params, auth) => {
@@ -184,10 +194,10 @@ const plugin = definePlugin({
       const comments = await ctx.issues.listComments(issueId, companyId);
       const selected = comments.find((comment) => comment.id === commentId);
       if (!selected || !isAgentComment(selected)) throw new Error('Comment is not an agent response');
-      const { text, truncated } = spokenComment(selected.body, config.maxSpokenChars);
-      if (!text) return startJob(companyId, ownerId, async () => ({ audioBase64: '', mime: 'audio/wav', bytes: 0, truncated }));
       const language = allowedLanguage(params.language, config.language);
-      const voice = language === 'en' ? 'en_US-lessac-medium' : config.voice;
+      const { text, truncated } = spokenComment(selected.body, config.maxSpokenChars, language);
+      if (!text) return startJob(companyId, ownerId, async () => ({ audioBase64: '', mime: 'audio/wav', bytes: 0, truncated }));
+      const voice = voiceForLanguage(config, language);
       return startJob(companyId, ownerId, async signal => ({
         ...await synthesizeAudio(config, {
           language, voice, speechRate: config.speechRate, text, timeoutMs: 120_000, signal,
@@ -202,7 +212,7 @@ const plugin = definePlugin({
       const status = requiredString(params, 'status');
       const text = STATUS_MESSAGES[language]?.[status];
       if (!text) throw new Error('Unknown status message');
-      const voice = language === 'en' ? 'en_US-lessac-medium' : config.voice;
+      const voice = voiceForLanguage(config, language);
       return startJob(companyId, ownerId, signal => synthesizeAudio(config, {
         language, voice, speechRate: config.speechRate, text, timeoutMs: 120_000, signal,
       }));

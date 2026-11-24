@@ -10,6 +10,8 @@ from pathlib import Path
 MODELS = {
     "de": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
     "en": "en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+    "nl": "nl/nl_NL/alex/medium/nl_NL-alex-medium.onnx",
+    "no": "no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx",
 }
 
 

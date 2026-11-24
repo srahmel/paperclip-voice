@@ -3,10 +3,16 @@ export const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 export const MAX_AUDIO_BASE64_CHARS = Math.ceil(MAX_AUDIO_BYTES / 3) * 4 + 4;
 export const ALLOWED_AUDIO_MIMES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav', 'audio/x-wav'];
 export const DEFAULT_VOICE_PRESET = 'Use saved voice ID';
+export const VOICE_LANGUAGES = Object.freeze({ de: 'Deutsch', en: 'English', nl: 'Nederlands', no: 'Norsk (bokmål)' });
 export const GERMAN_VOICE_PRESETS = Object.freeze({
   [DEFAULT_VOICE_PRESET]: null,
   Thorsten: 'de_DE-thorsten-medium',
   Kerstin: 'de_DE-kerstin-low',
+});
+export const OTHER_VOICE_PRESETS = Object.freeze({
+  en: { setting: 'englishVoicePreset', title: 'English voice', default: 'Lessac', voices: { Lessac: 'en_US-lessac-medium', Cori: 'en_GB-cori-medium' } },
+  nl: { setting: 'dutchVoicePreset', title: 'Dutch voice', default: 'Alex', voices: { Alex: 'nl_NL-alex-medium', Nathalie: 'nl_BE-nathalie-medium' } },
+  no: { setting: 'norwegianVoicePreset', title: 'Norwegian Bokmål voice', default: 'Talesyntese', voices: { Talesyntese: 'no_NO-talesyntese-medium', NVCC: 'no_NO-nvcc-medium' } },
 });
 const DEFAULTS = Object.freeze({
   backend: 'python',
@@ -14,9 +20,20 @@ const DEFAULTS = Object.freeze({
   language: 'de',
   voice: 'de_DE-thorsten-medium',
   voicePreset: DEFAULT_VOICE_PRESET,
+  ...Object.fromEntries(Object.values(OTHER_VOICE_PRESETS).map(preset => [preset.setting, preset.default])),
   maxSpokenChars: 380,
   speechRate: 1,
 });
+
+export function isVoiceLanguage(value) {
+  return typeof value === 'string' && Object.hasOwn(VOICE_LANGUAGES, value);
+}
+
+export function voiceForLanguage(config, language) {
+  if (language === 'de') return config.voice;
+  const preset = OTHER_VOICE_PRESETS[language];
+  return preset.voices[config[preset.setting]];
+}
 
 export function assertLocalVoiceboxUrl(value) {
   const u = new URL(value);
@@ -37,10 +54,14 @@ export function parseConfig(raw = {}) {
   if (!['python', 'voicebox'].includes(config.backend)) throw new Error('Invalid audio backend');
   for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot', 'moonshinePython', 'moonshineModelDir']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
   config.voiceboxUrl = assertLocalVoiceboxUrl(config.voiceboxUrl);
-  if (!['de', 'en'].includes(config.language)) throw new Error('language must be de or en');
+  if (!isVoiceLanguage(config.language)) throw new Error('Invalid speech language');
   if (typeof config.voicePreset !== 'string' || !Object.hasOwn(GERMAN_VOICE_PRESETS, config.voicePreset)) throw new Error('Invalid German voice preset');
   if (!/^[a-z]{2}_[A-Z]{2}-[a-zA-Z0-9_-]{2,80}$/.test(config.voice)) throw new Error('Invalid Piper voice identifier');
   config.voice = GERMAN_VOICE_PRESETS[config.voicePreset] ?? config.voice;
+  for (const preset of Object.values(OTHER_VOICE_PRESETS)) {
+    const selected = config[preset.setting];
+    if (typeof selected !== 'string' || !Object.hasOwn(preset.voices, selected)) throw new Error(`Invalid ${preset.title} preset`);
+  }
   if (!Number.isInteger(config.maxSpokenChars) || config.maxSpokenChars < 120 || config.maxSpokenChars > 1000) throw new Error('maxSpokenChars out of range');
   if (typeof config.speechRate !== 'number' || config.speechRate < 0.7 || config.speechRate > 1.5) throw new Error('speechRate out of range');
   return config;
@@ -65,16 +86,24 @@ export function decodeBase64Audio(value) {
   return bytes;
 }
 
+const SPOKEN_NOTICES = {
+  de: ['technischer Code im Chat', 'Link im Chat', 'Tabelle im Chat', 'Weitere Details stehen im Paperclip-Chat.'],
+  en: ['code in the chat', 'link in the chat', 'table in the chat', 'More details are in the Paperclip chat.'],
+  nl: ['code in de chat', 'link in de chat', 'tabel in de chat', 'Meer details staan in de Paperclip-chat.'],
+  no: ['kode i chatten', 'lenke i chatten', 'tabell i chatten', 'Du finner flere detaljer i Paperclip-chatten.'],
+};
+
 /** Keep the authoritative long-form answer untouched in Paperclip; only shorten speech. */
-export function cleanSpokenText(raw, limit = DEFAULTS.maxSpokenChars) {
+export function cleanSpokenText(raw, limit = DEFAULTS.maxSpokenChars, language = 'de') {
   const source = String(raw ?? '');
+  const [codeNotice, linkNotice, tableNotice, moreDetails] = SPOKEN_NOTICES[language] ?? SPOKEN_NOTICES.de;
   const text = source
-    .replace(/```[\s\S]*?```/g, ' (technischer Code im Chat) ')
+    .replace(/```[\s\S]*?```/g, ` (${codeNotice}) `)
     .replace(/<[^>]+>/g, ' ')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/https?:\/\/\S+/g, ' (Link im Chat) ')
-    .replace(/^\s*\|.*\|\s*$/gm, ' (Tabelle im Chat) ')
+    .replace(/https?:\/\/\S+/g, ` (${linkNotice}) `)
+    .replace(/^\s*\|.*\|\s*$/gm, ` (${tableNotice}) `)
     .replace(/^\s*#{1,6}\s*/gm, '')
     .replace(/^\s*(?:[-*+] |\d+\. )/gm, '')
     .replace(/[\*_`~]/g, '')
@@ -84,15 +113,22 @@ export function cleanSpokenText(raw, limit = DEFAULTS.maxSpokenChars) {
   const stop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
   const boundary = stop > Math.floor(limit * 0.4) ? stop + 1 : head.lastIndexOf(' ');
   const excerpt = head.slice(0, boundary > limit * 0.5 ? boundary : limit).trim();
-  return { text: `${excerpt} Weitere Details stehen im Paperclip-Chat.`, truncated: true };
+  return { text: `${excerpt} ${moreDetails}`, truncated: true };
 }
 
+const CONCISE_VOICE_HINTS = {
+  de: '[Sprachmodus: Antworte hier möglichst in ein bis drei kurzen Sätzen. Vollständige Arbeitsergebnisse und wichtige Details bitte in den regulären Aufgaben dokumentieren.]',
+  en: '[Voice mode: Reply in English in one to three short sentences where possible. Record full results and important details in the regular tasks.]',
+  nl: '[Spraakmodus: Antwoord zo mogelijk in één tot drie korte zinnen in het Nederlands. Leg volledige resultaten en belangrijke details vast in de reguliere taken.]',
+  no: '[Talemodus: Svar på norsk bokmål med én til tre korte setninger hvis mulig. Dokumenter fullstendige resultater og viktige detaljer i de vanlige oppgavene.]',
+};
+
 /** Explicit, per-turn user instruction; not a permanent agent prompt or separate conversation. */
-export function voiceMessage(text, concise = true) {
+export function voiceMessage(text, concise = true, language = 'de') {
   const t = String(text ?? '').trim();
   if (!t || t.length > 5000) throw new Error('Voice transcript is empty or too long');
   if (!concise) return t;
-  return `${t}\n\n[Sprachmodus: Antworte hier möglichst in ein bis drei kurzen Sätzen. Vollständige Arbeitsergebnisse und wichtige Details bitte in den regulären Aufgaben dokumentieren.]`;
+  return `${t}\n\n${CONCISE_VOICE_HINTS[language] ?? CONCISE_VOICE_HINTS.de}`;
 }
 
 /** Derive current Paperclip destination without mutating the host route. */

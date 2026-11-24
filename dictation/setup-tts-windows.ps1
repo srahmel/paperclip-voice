@@ -10,14 +10,17 @@ $python = Join-Path $venv 'Scripts\python.exe'
 & $python -m pip install -r (Join-Path $PSScriptRoot 'requirements-tts.txt')
 if ($LASTEXITCODE -ne 0) { throw 'TTS dependency installation failed.' }
 $revision = 'b4e358ffcb232591bf73a540e70f7de528e4174a'
-$files = @(
+$voiceModels = @(
     'de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx',
-    'de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json',
     'de/de_DE/kerstin/low/de_DE-kerstin-low.onnx',
-    'de/de_DE/kerstin/low/de_DE-kerstin-low.onnx.json',
     'en/en_US/lessac/medium/en_US-lessac-medium.onnx',
-    'en/en_US/lessac/medium/en_US-lessac-medium.onnx.json'
+    'en/en_GB/cori/medium/en_GB-cori-medium.onnx',
+    'nl/nl_NL/alex/medium/nl_NL-alex-medium.onnx',
+    'nl/nl_BE/nathalie/medium/nl_BE-nathalie-medium.onnx',
+    'no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx',
+    'no/no_NO/nvcc/medium/no_NO-nvcc-medium.onnx'
 )
+$files = foreach ($model in $voiceModels) { $model; "$model.json" }
 foreach ($relative in $files) {
     $destination = Join-Path $models $relative
     if (-not (Test-Path -LiteralPath $destination)) {
