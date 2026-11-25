@@ -3,6 +3,7 @@ import { LocalSpeechStream, localStreamReady, MAX_STREAM_CHUNK_BYTES, MAX_STREAM
 import { randomUUID } from 'node:crypto';
 import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
 import { decodeBase64Audio, isAgentComment, isVoiceLanguage, parseConfig, voiceForLanguage } from './lib/voice-utils.mjs';
+import { extractVoiceTaskReceipt, voiceConfirmationPrompt, voiceConfirmationStatus } from './lib/voice-confirmation.mjs';
 import { spokenComment, synthesizeWithVoicebox, transcribeWithVoicebox, voiceboxHealth } from './lib/voicebox-client.mjs';
 
 type JobState = 'pending' | 'ready' | 'error';
@@ -35,22 +36,22 @@ const streams = new Map<string, VoiceStream>();
 const STATUS_MESSAGES: Record<string, Record<string, string>> = {
   de: {
     submitted: 'Gesendet.',
-    waiting: 'Moment, ich schaue nach.',
+    waiting: 'Einen Moment bitte.',
     no_speech: 'Ich habe nichts verstanden.',
   },
   en: {
     submitted: 'Sent.',
-    waiting: 'One moment, I am checking.',
+    waiting: 'One moment, please.',
     no_speech: 'I did not understand.',
   },
   nl: {
     submitted: 'Verzonden.',
-    waiting: 'Een moment, ik kijk het na.',
+    waiting: 'Een moment, alsjeblieft.',
     no_speech: 'Ik heb het niet verstaan.',
   },
   no: {
     submitted: 'Sendt.',
-    waiting: 'Et øyeblikk, jeg sjekker.',
+    waiting: 'Et øyeblikk, takk.',
     no_speech: 'Jeg forsto ikke.',
   },
 };
@@ -225,7 +226,18 @@ const plugin = definePlugin({
       const selected = comments.find((comment) => comment.id === commentId);
       if (!selected || !isAgentComment(selected)) throw new Error('Comment is not an agent response');
       const language = allowedLanguage(params.language, config.language);
-      const { text, truncated } = spokenComment(selected.body, config.maxSpokenChars, language);
+      const receipt = extractVoiceTaskReceipt(selected.body);
+      const spoken = spokenComment(receipt.text, config.maxSpokenChars, language);
+      let { text } = spoken;
+      const { truncated } = spoken;
+      const since = typeof params.voiceOrderSince === 'string' ? Date.parse(params.voiceOrderSince) : NaN;
+      if (receipt.taskId && receipt.taskId !== issueId && selected.authorAgentId && Number.isFinite(since)) {
+        const task = await ctx.issues.get(receipt.taskId, companyId).catch(() => null);
+        const created = task ? new Date(task.createdAt).getTime() : NaN;
+        if (task?.companyId === companyId && task.createdByAgentId === selected.authorAgentId && created >= since && created <= new Date(selected.createdAt).getTime()) {
+          text = `${voiceConfirmationStatus('created', language)} ${text}`.trim();
+        }
+      }
       if (!text) return startJob(companyId, ownerId, async () => ({ audioBase64: '', mime: 'audio/wav', bytes: 0, truncated }));
       const voice = voiceForLanguage(config, language);
       return startJob(companyId, ownerId, async signal => ({
@@ -235,12 +247,22 @@ const plugin = definePlugin({
       }));
     });
 
+    ctx.actions.register('voice-speak-confirmation', async (params, auth) => {
+      const { companyId, ownerId } = requireScope(params, auth);
+      const config = await configFor(companyId);
+      const language = allowedLanguage(params.language, config.language);
+      const text = voiceConfirmationPrompt(requiredString(params, 'transcript'), language);
+      return startJob(companyId, ownerId, signal => synthesizeAudio(config, {
+        language, voice: voiceForLanguage(config, language), speechRate: config.speechRate, text, timeoutMs: 120_000, signal,
+      }));
+    });
+
     ctx.actions.register('voice-speak-status', async (params, auth) => {
       const { companyId, ownerId } = requireScope(params, auth);
       const config = await configFor(companyId);
       const language = allowedLanguage(params.language, config.language);
       const status = requiredString(params, 'status');
-      const text = STATUS_MESSAGES[language]?.[status];
+      const text = STATUS_MESSAGES[language]?.[status] ?? voiceConfirmationStatus(status, language);
       if (!text) throw new Error('Unknown status message');
       const voice = voiceForLanguage(config, language);
       return startJob(companyId, ownerId, signal => synthesizeAudio(config, {

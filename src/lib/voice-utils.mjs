@@ -124,11 +124,13 @@ const CONCISE_VOICE_HINTS = {
 };
 
 /** Explicit, per-turn user instruction; not a permanent agent prompt or separate conversation. */
-export function voiceMessage(text, concise = true, language = 'de') {
+export function voiceMessage(text, concise = true, language = 'de', taskReceipt = false) {
   const t = String(text ?? '').trim();
   if (!t || t.length > 5000) throw new Error('Voice transcript is empty or too long');
-  if (!concise) return t;
-  return `${t}\n\n${CONCISE_VOICE_HINTS[language] ?? CONCISE_VOICE_HINTS.de}`;
+  const parts = [t];
+  if (concise) parts.push(CONCISE_VOICE_HINTS[language] ?? CONCISE_VOICE_HINTS.de);
+  if (taskReceipt) parts.push('[Voice mode: If you create a new Paperclip task for this request, add a final line in the form Task created: <Paperclip task UUID>.]');
+  return parts.join('\n\n');
 }
 
 /** Derive current Paperclip destination without mutating the host route. */

@@ -22,13 +22,15 @@ task. Navigating away stops recording and
 playback. Closing the panel, stopping or disabling the plugin releases audio
 resources and cancels pending audio jobs.
 
-- Choose **Freisprechen starten (sendet automatisch)**, then speak and pause.
+- Choose **Freisprechen starten**, then speak and pause. Voice reads back the
+  transcript before sending a question or task. Say **Ja** or **Ja, senden**
+  to send, **Nein** to discard, or **Korrektur** followed by the replacement
+  message. A confirmation expires after 30 seconds.
   German can use streaming Moonshine. English, Dutch and Norwegian Bokmål use
   local Whisper after each pause and then resume listening after the reply.
   The panel shows the microphone level and indicates when speech is detected.
 - Choose **Aufnahme mit Vorschau starten** to review and edit the text before
-  selecting **Transkript absenden**. Automatic submission is also available
-  in **Optionen** for an ongoing conversation.
+  selecting **Transkript absenden**.
 - The concise-answer instruction stays visible in each submitted comment.
 - Existing agent answers stay in Paperclip and can be spoken with local Piper.
 - Under **Optionen**, import a recording for transcription and text review.
@@ -124,9 +126,12 @@ With German selected and Moonshine configured, hands-free mode sends speech in
 chunks over authenticated Paperclip plugin actions. An in-memory recognizer
 stays active between turns. If it returns an empty transcript, the plugin
 passes the current turn to local Whisper using the audio already received.
-Hands-free mode plays a Piper prompt when a sent question is still waiting
-for an agent reply after three seconds. The microphone resumes after the
-spoken reply.
+After spoken confirmation, Voice can play a preloaded Piper clip once while
+Paperclip is still saving the message or while the agent reply is pending. It
+plays the submission acknowledgment once Paperclip accepts the message. Voice
+reads back agent replies and adds a task-creation acknowledgment when the agent
+supplies a task receipt that can be verified against Paperclip. The microphone
+resumes after the spoken reply.
 
 The runtime reads preinstalled model files and has no separate network listener,
 cloud speech service, or audio recording store. The accepted text is posted as

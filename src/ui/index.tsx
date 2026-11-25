@@ -7,9 +7,11 @@ import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, rea
 import { appendDictation, useVoiceMounts, type DraftBinding } from './composer-mounts';
 import { VoiceIcon } from './voice-icons';
 import { startLocalConversation } from './local-conversation';
+import { CONFIRMATION_TIMEOUT_MS, MAX_CONFIRMATION_CHARS, voiceConfirmationDecision } from '../lib/voice-confirmation.mjs';
 
-type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'capturing' | 'transcribing' | 'review' | 'sending' | 'submitted' | 'waiting' | 'speaking' | 'error';
+type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'capturing' | 'transcribing' | 'confirming' | 'review' | 'sending' | 'submitted' | 'waiting' | 'speaking' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
+type PendingConfirmation = { text: string; target: Target; expiresAt: number };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
 type AudioResult = { audioBase64: string; mime: string; bytes: number };
 
@@ -78,6 +80,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const companyId = context.companyId ?? '';
   const transcribe = usePluginAction('voice-transcribe');
   const speakComment = usePluginAction('voice-speak-comment');
+  const speakConfirmation = usePluginAction('voice-speak-confirmation');
   const speakStatus = usePluginAction('voice-speak-status');
   const poll = usePluginAction('voice-poll');
   const cancel = usePluginAction('voice-cancel');
@@ -102,8 +105,6 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const [error, setError] = useState<string | null>(null);
   const [listeningHint, setListeningHint] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
-  const [autoSend, setAutoSend] = useState(false);
-  const autoSendRef = useRef(false);
   const [autoContinue, setAutoContinue] = useState(true);
   const autoContinueRef = useRef(true);
   const [silenceThreshold, setSilenceThreshold] = useState(DEFAULT_SPEECH_LEVEL);
@@ -129,15 +130,26 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const activeIssueIdRef = useRef<string | null>(null);
   const localConversationRef = useRef<(() => void) | null>(null);
   const handsFreeRef = useRef(false);
+  const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
+  const confirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceOrderSinceRef = useRef<string | null>(null);
   const voiceTurnRef = useRef(0);
   const waitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const waitPlaybackRef = useRef<Promise<void> | null>(null);
   const waitAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
+  const acceptedAudioRef = useRef<Promise<AudioBuffer | null> | null>(null);
 
   const setPhase = (next: Phase) => { phaseRef.current = next; setPhaseState(next); };
   const setMode = (next: typeof mode) => { modeRef.current = next; setModeState(next); };
   const setTarget = (next: Target | null) => { targetRef.current = next; setTargetState(next); };
   const active = (epoch: number) => epoch === epochRef.current && sessionActiveRef.current && sessionPathRef.current === window.location.pathname;
   const showMicLevel = (rms: number) => setMicLevel(Math.round(Math.min(1, rms / 0.03) * 10) / 10);
+
+  const clearConfirmation = useCallback(() => {
+    if (confirmationTimerRef.current) clearTimeout(confirmationTimerRef.current);
+    confirmationTimerRef.current = null;
+    pendingConfirmationRef.current = null;
+  }, []);
 
   const teardown = useCallback(() => {
     sessionActiveRef.current = false;
@@ -146,9 +158,13 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     localConversationRef.current?.();
     localConversationRef.current = null;
     handsFreeRef.current = false;
+    clearConfirmation();
+    voiceOrderSinceRef.current = null;
     if (waitTimerRef.current) clearTimeout(waitTimerRef.current);
     waitTimerRef.current = null;
+    waitPlaybackRef.current = null;
     waitAudioRef.current = null;
+    acceptedAudioRef.current = null;
     if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
     silenceIntervalRef.current = null;
     if (monitorIntervalRef.current) clearInterval(monitorIntervalRef.current);
@@ -171,9 +187,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     activeIssueIdRef.current = null;
     seenCommentIdsRef.current.clear();
     setMicLevel(0);
+    setLastTranscript('');
     phaseRef.current = 'off';
     setPhaseState('off');
-  }, []);
+  }, [clearConfirmation]);
 
   useEffect(() => {
     window.addEventListener('pagehide', teardown);
@@ -263,16 +280,18 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     waitTimerRef.current = null;
   }
 
-  function scheduleWaitHint(epoch: number) {
+  function scheduleWaitHint(epoch: number, phase: 'sending' | 'waiting', delayMs: number, acknowledged = Promise.resolve()) {
     clearWaitTimer();
+    if (waitPlaybackRef.current) return;
     const turn = voiceTurnRef.current;
     const pendingAudio = waitAudioRef.current;
     const timer = setTimeout(() => {
-      const current = () => waitTimerRef.current === timer && active(epoch) && voiceTurnRef.current === turn && phaseRef.current === 'waiting';
-      void pendingAudio?.then(audio => {
-        if (audio && current()) return playDecoded(audio, current);
+      const current = () => waitTimerRef.current === timer && active(epoch) && voiceTurnRef.current === turn && phaseRef.current === phase;
+      void pendingAudio?.then(async audio => {
+        await acknowledged;
+        if (audio && current() && !waitPlaybackRef.current) waitPlaybackRef.current = playDecoded(audio, current).catch(() => undefined);
       }).catch(() => undefined);
-    }, 3000);
+    }, delayMs);
     waitTimerRef.current = timer;
   }
 
@@ -288,6 +307,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   }
 
   async function sayStatus(status: string, epoch: number): Promise<void> {
+    setPhase('speaking');
     const result = await audioJob<AudioResult>(speakStatus, { status, language }, epoch);
     await playAudio(result, epoch);
   }
@@ -296,7 +316,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const turn = voiceTurnRef.current;
     const current = () => active(epoch) && turn === voiceTurnRef.current;
     setPhase('waiting');
-    if (handsFreeRef.current) scheduleWaitHint(epoch);
+    const acceptedAudio = acceptedAudioRef.current;
+    const acknowledged = Promise.resolve(waitPlaybackRef.current).then(async () => {
+      const audio = await acceptedAudio;
+      if (audio && current() && phaseRef.current === 'waiting') return playDecoded(audio, current);
+    }).catch(() => undefined);
+    if (handsFreeRef.current) scheduleWaitHint(epoch, 'waiting', 3000, acknowledged);
     const deadline = Date.now() + 15 * 60 * 1000;
     while (current() && phaseRef.current === 'waiting' && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, localConversationRef.current ? 1000 : 1800));
@@ -308,7 +333,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       if (newReplies.length) {
         const latest = newReplies[newReplies.length - 1];
         clearWaitTimer();
-        const spoken = await audioJob<AudioResult>(speakComment, { issueId: issue, commentId: latest.id, language }, epoch, turn);
+        const spoken = await audioJob<AudioResult>(speakComment, { issueId: issue, commentId: latest.id, language, voiceOrderSince: voiceOrderSinceRef.current }, epoch, turn);
+        await acknowledged;
         if (!current()) return;
         setLastReply(latest.body ?? '');
         await playAudio(spoken, epoch, turn);
@@ -325,7 +351,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     }
   }
 
-  async function submitTranscript(text: string, epoch: number): Promise<void> {
+  async function submitTranscript(text: string, epoch: number, approved?: PendingConfirmation): Promise<void> {
     if (!active(epoch) || phaseRef.current === 'sending') return;
     if (!text.trim()) throw new Error('Das Transkript ist leer.');
     if (modeRef.current === 'dictation') {
@@ -335,9 +361,17 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       teardown(); draftRef.current = null; setOpened(false);
       return;
     }
-    const selected = targetRef.current;
+    if (handsFreeRef.current && (!approved || pendingConfirmationRef.current !== approved || approved.text !== text || performance.now() >= approved.expiresAt)) {
+      throw new Error('Die Nachricht braucht eine gültige Sprachbestätigung.');
+    }
+    const selected = approved?.target ?? targetRef.current;
     if (!selected) throw new Error('Wähle zuerst einen Agenten oder eine Aufgabe.');
+    clearConfirmation();
     setPhase('sending');
+    if (approved) {
+      waitPlaybackRef.current = null;
+      scheduleWaitHint(epoch, 'sending', 1200);
+    }
     const issue = activeIssueIdRef.current ?? await resolveIssue(companyId, selected);
     if (!active(epoch)) return;
     activeIssueIdRef.current = issue;
@@ -347,10 +381,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     for (const c of before) seenCommentIdsRef.current.add(c.id);
     if (!active(epoch)) return;
     const clientRequestId = crypto.randomUUID();
-    const message = voiceMessage(text, conciseReplyRef.current, language);
+    const message = voiceMessage(text, conciseReplyRef.current, language, Boolean(approved));
     // Native authenticated Paperclip user operation, not a parallel plugin agent chat.
     // 5xx or transport failure is an UNKNOWN outcome: never retry automatically.
-    try { await postNativeComment(issue, message, clientRequestId); }
+    try {
+      const receipt = await postNativeComment(issue, message, clientRequestId);
+      if (active(epoch) && approved && typeof receipt?.createdAt === 'string' && Number.isFinite(Date.parse(receipt.createdAt))) {
+        voiceOrderSinceRef.current ??= receipt.createdAt;
+      }
+    }
     catch { throw new Error('Senden möglicherweise erfolgt. Bitte den Chat prüfen, bevor du erneut sendest.'); }
     if (!active(epoch)) return;
     // Imported recordings are a single dictation, with no live microphone or
@@ -362,6 +401,78 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     if (active(epoch)) await waitForAgent(issue, epoch);
   }
 
+  async function readConfirmation(pending: PendingConfirmation, epoch: number, repeat = false): Promise<void> {
+    setPhase('speaking');
+    if (repeat) {
+      await sayStatus('retry', epoch);
+    } else {
+      const prompt = await audioJob<AudioResult>(speakConfirmation, { transcript: pending.text, language }, epoch);
+      if (!prompt.audioBase64) throw new Error('Die Sprachbestätigung konnte nicht abgespielt werden.');
+      await playAudio(prompt, epoch);
+    }
+    if (!active(epoch) || pendingConfirmationRef.current !== pending) return;
+    pending.expiresAt = performance.now() + CONFIRMATION_TIMEOUT_MS;
+    confirmationTimerRef.current = setTimeout(() => {
+      if (!active(epoch) || pendingConfirmationRef.current !== pending) return;
+      clearConfirmation();
+      setLastTranscript('');
+      setError('Bestätigung abgelaufen. Bitte sage die Nachricht erneut.');
+      if (phaseRef.current === 'confirming') setPhase('listening');
+    }, CONFIRMATION_TIMEOUT_MS);
+    await startCapture(epoch);
+  }
+
+  async function receiveTranscript(text: string, epoch: number): Promise<void> {
+    if (!active(epoch)) return;
+    const pending = pendingConfirmationRef.current;
+    if (!text) {
+      if (modeRef.current === 'dictation') await sayStatus('no_speech', epoch);
+      else setError(pending ? 'Bestätigung nicht verstanden. Sag Ja, Nein oder Korrektur.' : 'Kein Satz erkannt. Ich höre weiter zu.');
+      await startCapture(epoch);
+      return;
+    }
+    if (!handsFreeRef.current) {
+      setLastTranscript(text);
+      setPhase('review');
+      return;
+    }
+    const decision = voiceConfirmationDecision(text, language);
+    if (pending && performance.now() < pending.expiresAt) {
+      if (decision.kind === 'approve') { await submitTranscript(pending.text, epoch, pending); return; }
+      if (decision.kind === 'discard') {
+        clearConfirmation();
+        setLastTranscript('');
+        await sayStatus('cancelled', epoch);
+        await startCapture(epoch);
+        return;
+      }
+      if (decision.kind === 'unclear') {
+        if (confirmationTimerRef.current) clearTimeout(confirmationTimerRef.current);
+        pending.expiresAt = 0;
+        await readConfirmation(pending, epoch, true);
+        return;
+      }
+    } else if (decision.kind === 'approve' || decision.kind === 'discard') {
+      setError('Es wartet keine Nachricht auf Bestätigung.');
+      await startCapture(epoch);
+      return;
+    }
+    const draft = decision.kind === 'correct' ? decision.text : text;
+    clearConfirmation();
+    if (draft.length > MAX_CONFIRMATION_CHARS) {
+      setLastTranscript('');
+      await sayStatus('too_long', epoch);
+      await startCapture(epoch);
+      return;
+    }
+    const target = pending?.target ?? targetRef.current;
+    if (!target) throw new Error('Wähle zuerst einen Agenten oder eine Aufgabe.');
+    const proposal = { text: draft, target, expiresAt: 0 };
+    pendingConfirmationRef.current = proposal;
+    setLastTranscript(draft);
+    await readConfirmation(proposal, epoch);
+  }
+
   async function processRecording(blob: Blob, epoch: number): Promise<void> {
     if (!active(epoch)) return;
     try {
@@ -370,17 +481,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       const audioBase64 = await audioBlobToBase64(blob);
       if (!active(epoch)) return;
       const transcription = await audioJob<{ text: string }>(transcribe, { audioBase64, mimeType: blob.type || 'audio/webm', language }, epoch);
-      const text = transcription.text?.trim() ?? '';
-      if (!active(epoch)) return;
-      if (!text) {
-        if (modeRef.current === 'dictation') await sayStatus('no_speech', epoch);
-        else setError('Kein Satz erkannt. Ich höre weiter zu.');
-        await startCapture(epoch);
-        return;
-      }
-      setLastTranscript(text);
-      if (modeRef.current === 'dictation' || !(handsFreeRef.current || autoSendRef.current)) { setPhase('review'); return; }
-      await submitTranscript(text, epoch);
+      await receiveTranscript(transcription.text?.trim() ?? '', epoch);
     } catch (cause) {
       if (active(epoch)) { teardown(); setError(friendlyError(cause)); setPhase('error'); }
     }
@@ -414,7 +515,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
           silenceIntervalRef.current = null;
           const latest = newReplies[newReplies.length - 1];
-          const spoken = await audioJob<AudioResult>(speakComment, { issueId: currentIssue, commentId: latest.id, language }, epoch, turn);
+          const spoken = await audioJob<AudioResult>(speakComment, { issueId: currentIssue, commentId: latest.id, language, voiceOrderSince: voiceOrderSinceRef.current }, epoch, turn);
           if (!current()) return;
           setLastReply(latest.body ?? '');
           await playAudio(spoken, epoch, turn);
@@ -439,7 +540,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     }
     setMicLevel(0);
     if (localConversationRef.current) {
-      setPhase('listening');
+      setPhase(pendingConfirmationRef.current ? 'confirming' : 'listening');
       ensureReplyMonitor(epoch);
       return;
     }
@@ -473,7 +574,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       void processRecording(blob, epoch);
     };
     recorder.start(1000);
-    setPhase('listening');
+    setPhase(pendingConfirmationRef.current ? 'confirming' : 'listening');
     const samples = new Float32Array(analyser.fftSize);
     silenceIntervalRef.current = setInterval(() => {
       if (!active(epoch) || recorder.state === 'inactive') return;
@@ -558,10 +659,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       }, { once: true });
       const input = ctx.createMediaStreamSource(stream);
       if (handsFree) {
-        waitAudioRef.current = audioJob<AudioResult>(speakStatus, { status: 'waiting', language }, epoch).then(result => {
+        const preload = (status: string) => audioJob<AudioResult>(speakStatus, { status, language }, epoch).then(result => {
           if (!active(epoch) || !result.audioBase64) return null;
           return ctx.decodeAudioData(audioBase64ToBuffer(result.audioBase64));
         }).catch(() => null);
+        waitAudioRef.current = preload('waiting');
+        acceptedAudioRef.current = waitAudioRef.current.then(() => active(epoch) ? preload('accepted') : null);
       }
       if (canStream && ctx.audioWorklet && ctx.sampleRate >= 16_000) {
         const onError = (cause: unknown) => {
@@ -570,7 +673,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         const stop = await startLocalConversation({
           context: ctx, input, companyId, start: startStream, update: updateStream,
           active: () => active(epoch),
-          canListen: () => !playingSourceRef.current && ['listening', 'capturing'].includes(phaseRef.current),
+          canListen: () => !playingSourceRef.current && ['listening', 'capturing', 'confirming'].includes(phaseRef.current),
           threshold: () => thresholdRef.current,
           onLevel: showMicLevel,
           onStartSpeech: () => {
@@ -587,13 +690,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           recoverText: async jobId => (await audioJob<{ text: string }>(async () => ({ jobId }), {}, epoch)).text,
           onText: text => {
             const turn = voiceTurnRef.current;
-            if (!text) {
-              setError('Kein Satz erkannt. Ich höre weiter zu.');
-              setPhase('listening');
-              return;
-            }
-            setLastTranscript(text);
-            void submitTranscript(text, epoch).catch(cause => { if (voiceTurnRef.current === turn) onError(cause); });
+            void receiveTranscript(text, epoch).catch(cause => { if (voiceTurnRef.current === turn) onError(cause); });
           },
           onError,
         });
@@ -655,10 +752,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         <h2 style={P.title}>{mode === 'dictation' ? 'Diktat' : mode === 'read' ? 'Antwort vorlesen' : 'Sprachmodus'}</h2>
         <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : 'Im Freisprechen genügt eine Sprechpause zum Senden. Mit Vorschau kannst du das Transkript vor dem Senden prüfen.'}</p>
+      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
       <p style={{ ...P.muted, margin: '12px 0', display: 'flex', alignItems: 'center', gap: 8 }} role="status">
-        {(phase === 'listening' || phase === 'capturing') && <MicrophoneWave level={micLevel} capturing={phase === 'capturing'} />}
-        {({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
+        {(['listening', 'capturing', 'confirming'].includes(phase)) && <MicrophoneWave level={micLevel} capturing={phase === 'capturing'} />}
+        {({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
       </p>
       <p style={P.muted}>Lokale Spracherkennung: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Nicht erreichbar'}</p>
       <label htmlFor="voice-language">Sprache</label>
@@ -676,7 +773,6 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       </select></label>}
       {mode !== 'read' && <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
       <summary style={{ cursor: 'pointer', padding: '5px 0' }}>Optionen</summary>
-      {mode === 'conversation' && <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={handsFreeActive || autoSend} disabled={handsFreeActive} onChange={(event) => { autoSendRef.current = event.target.checked; setAutoSend(event.target.checked); }} /> Automatisch an Paperclip senden</label>}
       {mode === 'conversation' && <>
         <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={handsFreeActive || autoContinue} disabled={handsFreeActive} onChange={(event) => { autoContinueRef.current = event.target.checked; setAutoContinue(event.target.checked); }} /> Nach Antwort weiter zuhören</label>
         <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={conciseReply} onChange={(event) => { conciseReplyRef.current = event.target.checked; setConciseReply(event.target.checked); }} /> Knappe Antworten anfordern (sichtbar im Chat)</label>
@@ -690,13 +786,13 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       }} style={{ display: 'block', maxWidth: '100%', margin: '6px 0' }} />
       </details>}
       <div>
-        {canStartHandsFree && <button type="button" style={P.primary} onClick={() => void startSession(true)}>Freisprechen starten (sendet automatisch)</button>}
-        {canStart && mode !== 'read' ? <button type="button" style={canStartHandsFree ? P.button : P.primary} onClick={() => void startSession()}>{mode === 'dictation' ? 'Diktat starten' : autoSend ? 'Aufnahme starten (sendet automatisch)' : 'Aufnahme mit Vorschau starten'}</button> : null}
+        {canStartHandsFree && <button type="button" style={P.primary} onClick={() => void startSession(true)}>Freisprechen starten</button>}
+        {canStart && mode !== 'read' ? <button type="button" style={canStartHandsFree ? P.button : P.primary} onClick={() => void startSession()}>{mode === 'dictation' ? 'Diktat starten' : 'Aufnahme mit Vorschau starten'}</button> : null}
         {phase !== 'off' && <button type="button" style={P.button} onClick={() => { teardown(); setError(null); }}>Stoppen</button>}
         {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
         {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { if (modeRef.current !== 'dictation') { teardown(); setPhase('error'); } setError(friendlyError(cause)); })}>{mode === 'dictation' ? 'In Eingabe übernehmen' : 'Transkript absenden'}</button>}
       </div>
-      {lastTranscript && <div style={{ marginTop: 12 }}><strong>Zuletzt verstanden</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
+      {lastTranscript && <div style={{ marginTop: 12 }}><strong>{pendingConfirmationRef.current ? 'Entwurf zur Bestätigung' : 'Zuletzt verstanden'}</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
       {lastReply && <div style={{ marginTop: 10, maxHeight: 140, overflowY: 'auto' }}><strong>Letzte Antwort</strong><p style={{ ...P.muted, whiteSpace: 'pre-wrap' }}>{lastReply.slice(0, 1300)}{lastReply.length > 1300 ? ' …' : ''}</p></div>}
       {error && <p role="alert" style={{ color: 'var(--destructive)', padding: '8px 0', whiteSpace: 'pre-wrap' }}>{error}</p>}
       <p style={{ ...P.muted, marginTop: 10 }}>Auf dem Smartphone kann der Sprachmodus bei gesperrtem Bildschirm pausieren.</p>
