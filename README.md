@@ -29,12 +29,15 @@ The API key stays on the server. The browser streams live microphone audio to
 OpenAI over WebRTC, using billed OpenAI API usage. A call is limited to ten minutes.
 
 Select the agent for tasks and choose **Gespräch starten**. Discuss the work
-or ask questions in German, English, Dutch, or Norwegian Bokmål. Voice can
-create a task through the signed-in user's normal Paperclip permissions when
-the intended work is clear. The selected agent receives that task. Voice cites
-the Paperclip task number after the save succeeds. Ordinary conversation does
-not create a Paperclip chat or task. Voice has no access to agent chat history
-or existing tasks in a Realtime session.
+or ask questions in German, English, Dutch, or Norwegian Bokmål. When the
+conversation leads to one or more concrete tasks, Voice asks once whether to
+create them. An affirmative answer after that question submits the proposed
+tasks through the signed-in user's normal Paperclip permissions. The selected
+agent receives those tasks. Voice gives the numbers Paperclip returns after
+successful saves. Voice enables Realtime input transcription only during the
+approval prompt to verify the reply. Ordinary conversation does not create a Paperclip chat
+or task. Voice has no access to agent chat history or existing tasks in a
+Realtime session.
 
 ### Local conversations
 

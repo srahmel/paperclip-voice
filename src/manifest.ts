@@ -6,7 +6,7 @@ const advanced = { 'x-paperclip-advanced': true };
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.4.0',
+  version: '0.4.1',
   displayName: 'Paperclip Voice (Local)',
   description: 'Have a live voice conversation with OpenAI Realtime or dictate locally into Paperclip tasks.',
   author: 'paperclip-voice contributors',

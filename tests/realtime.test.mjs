@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRealtimeCall } from '../src/lib/openai-realtime.mjs';
 import { createNativeVoiceTask } from '../src/lib/paperclip-client.mjs';
-import { realtimeTaskHandler } from '../src/lib/realtime-task.mjs';
+import { approvedTaskWriter, readTaskProposal, taskApproval } from '../src/lib/realtime-task.mjs';
 import { parseConfig, realtimeAgentTarget } from '../src/lib/voice-utils.mjs';
 import { startRealtimeConversation } from '../src/ui/realtime-conversation.ts';
 
@@ -20,8 +20,10 @@ test('Realtime uses only the configured region and requests a conversational aud
         assert.ok(config.instructions.startsWith(`Start in ${label}.`));
         assert.equal(config.tracing, null);
         assert.equal(config.audio.input.turn_detection.interrupt_response, true);
+        assert.equal(config.audio.input.turn_detection.create_response, false);
+        assert.equal(config.audio.input.transcription, null);
         assert.equal(config.audio.output.voice, 'cedar');
-        assert.equal(config.tools[0].name, 'create_task');
+        assert.equal(config.tools[0].name, 'propose_tasks');
         return new Response('v=0\r\n', { status: 201, headers: { Location: '/v1/realtime/calls/rtc_example' } });
       },
     });
@@ -61,21 +63,29 @@ test('task writes use the chosen agent and a stable Paperclip idempotency key', 
 
 test('duplicates, unknown outcomes, and malformed tool arguments cannot trigger repeat task writes', async () => {
   let writes = 0;
-  const handle = realtimeTaskHandler({ companyId: 'test-company', agentId: 'agent', saveTask: async () => {
+  const handle = approvedTaskWriter({ companyId: 'test-company', agentId: 'agent', saveTask: async () => {
     writes++;
     throw new Error('Connection lost');
   } });
-  assert.deepEqual(handle('session', 'invalid', '[]'), { status: 'invalid_details' });
+  assert.deepEqual(readTaskProposal('[]'), []);
+  assert.equal(readTaskProposal(JSON.stringify({ tasks: [args, args] })).length, 1);
   assert.equal(writes, 0);
-  const first = handle('session', 'call-1', JSON.stringify(args));
-  const duplicate = handle('session', 'call-2', JSON.stringify({ ...args, title: '  REVIEW  OVERDUE QUOTES ' }));
-  assert.equal(first, duplicate);
-  assert.deepEqual(await first, { status: 'unknown' });
-  assert.deepEqual(await handle('session', 'call-3', JSON.stringify(args)), { status: 'unknown' });
+  const first = handle('session', 'call-1', [args]);
+  const duplicate = handle('session', 'call-2', [{ ...args, title: 'REVIEW  OVERDUE QUOTES' }]);
+  assert.deepEqual(await first, { identifiers: [], unknownCount: 1 });
+  assert.deepEqual(await duplicate, { identifiers: [], unknownCount: 1 });
   assert.equal(writes, 1);
 });
 
-test('the live client writes only completed task calls, then returns a Paperclip receipt and releases the microphone', async t => {
+test('spoken task approval recognizes clear answers without accepting qualified changes', () => {
+  for (const [language, yes, no] of [['de', 'Ja, mach das bitte.', 'Nein.'], ['en', 'Yes, go ahead.', 'No thanks.'], ['nl', 'Ja, doe maar.', 'Nee.'], ['no', 'Ja, gjør det.', 'Nei.']]) {
+    assert.equal(taskApproval(yes, language), 'approve');
+    assert.equal(taskApproval(no, language), 'discard');
+  }
+  assert.equal(taskApproval('Ja, aber erst nächsten Monat.', 'de'), 'unclear');
+});
+
+test('conversation proceeds immediately and a batch writes only after an audible question and matching spoken approval', async t => {
   const channel = { readyState: 'open', send: value => messages.push(JSON.parse(value)), close() {} };
   const messages = [];
   const writes = [];
@@ -86,7 +96,7 @@ test('the live client writes only completed task calls, then returns a Paperclip
   const events = { open: [] };
   t.mock.method(globalThis, 'fetch', async (url, request) => {
     writes.push({ url, body: JSON.parse(request.body) });
-    return Response.json({ id: 'issue', identifier: 'TEST-2', companyId: 'company', assigneeAgentId: 'agent' });
+    return Response.json({ id: `issue-${writes.length}`, identifier: `TEST-${writes.length}`, companyId: 'company', assigneeAgentId: 'agent' });
   });
   const original = new Map();
   for (const [name, value] of Object.entries({
@@ -115,7 +125,7 @@ test('the live client writes only completed task calls, then returns a Paperclip
     companyId: 'company', agentId: 'agent', language: 'en',
     connect: async payload => { events.open.push(payload); return { answer: 'v=0\r\n', sessionId: 'session' }; },
     disconnect: async payload => { stops.push(payload.sessionId); },
-    onPhase() {}, onMicLevel() {}, onReply() {}, onTask: id => receipts.push(id),
+    onPhase() {}, onMicLevel() {}, onReply() {}, onTasks: ids => receipts.push(...ids),
     onError: assert.fail, onPlaybackBlocked() {}, waitCue: async () => {},
   });
   t.after(conversation.stop);
@@ -125,19 +135,56 @@ test('the live client writes only completed task calls, then returns a Paperclip
   assert.deepEqual(events.open, [{ companyId: 'company', language: 'en', offer: 'v=0\r\n' }]);
   assert.equal(track.enabled, true);
 
-  const call = { type: 'function_call', name: 'create_task', call_id: 'task_1', arguments: JSON.stringify(args) };
-  event({ type: 'response.done', response: { status: 'completed', output: [{ type: 'message' }] } });
-  event({ type: 'response.done', response: { status: 'cancelled', output: [call] } });
+  const userTurn = itemId => {
+    event({ type: 'input_audio_buffer.speech_started', item_id: itemId });
+    event({ type: 'input_audio_buffer.speech_stopped', item_id: itemId });
+    event({ type: 'input_audio_buffer.committed', item_id: itemId });
+  };
+  const transcript = (itemId, text) => event({ type: 'conversation.item.input_audio_transcription.completed', item_id: itemId, transcript: text });
+  const tasks = [args, { title: 'Summarize quotes', description: 'Give the results to Klara.' }];
+  const call = id => ({ type: 'function_call', name: 'propose_tasks', call_id: id, arguments: JSON.stringify({ tasks }) });
+  const done = output => event({ type: 'response.done', response: { status: 'completed', output } });
+  const playQuestion = id => {
+    const questionId = `confirmation_${id}`;
+    event({ type: 'response.created', response: { id: questionId, metadata: { proposalId: id } } });
+    event({ type: 'output_audio_buffer.started', response_id: questionId });
+    done([]);
+    event({ type: 'output_audio_buffer.stopped', response_id: questionId });
+  };
+
+  userTurn('question');
+  assert.equal(messages.at(-1).type, 'response.create');
+  assert.deepEqual(messages.at(-1).response, {});
+  done([{ type: 'message' }]);
+  event({ type: 'response.done', response: { status: 'cancelled', output: [call('cancelled')] } });
+  done([call('decline')]);
+  assert.match(messages.at(-1).response.instructions, /Shall I create those 2 tasks/);
+  assert.deepEqual(JSON.parse(messages.findLast(message => message.type === 'conversation.item.create').item.output), { status: 'awaiting_approval', count: 2 });
+  assert.equal(messages.at(-2).session.audio.input.transcription.model, 'gpt-4o-mini-transcribe');
+  transcript('question', 'Yes.');
+  playQuestion('decline');
+  userTurn('no');
+  transcript('no', 'No.');
+  assert.match(messages.at(-1).response.instructions, /won’t create anything/);
+  assert.equal(messages.at(-2).session.audio.input.transcription, null);
+  done([]);
+
+  done([call('agree')]);
+  playQuestion('agree');
+  userTurn('approval');
+  transcript('question', 'Yes.');
   await turn();
   assert.equal(writes.length, 0);
 
-  event({ type: 'response.done', response: { status: 'completed', output: [call] } });
+  transcript('approval', 'Yes, go ahead.');
   await turn();
-  assert.equal(writes.length, 1);
-  assert.deepEqual(receipts, ['TEST-2']);
-  assert.equal(messages[0].item.call_id, 'task_1');
-  assert.deepEqual(JSON.parse(messages[0].item.output), { status: 'created', identifier: 'TEST-2' });
-  assert.equal(messages[1].type, 'response.create');
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes.map(write => write.body.idempotencyKey), ['voice:session:agree:0', 'voice:session:agree:1']);
+  assert.deepEqual(receipts, ['TEST-1', 'TEST-2']);
+  assert.match(messages.at(-1).response.instructions, /Tasks TEST-1, TEST-2 were created/);
+  transcript('approval', 'Yes.');
+  await turn();
+  assert.equal(writes.length, 2);
   conversation.stop();
   assert.deepEqual(stops, ['track', 'peer', 'session']);
 });

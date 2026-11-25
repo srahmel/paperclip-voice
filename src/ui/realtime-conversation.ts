@@ -1,12 +1,23 @@
-import { realtimeTaskHandler } from '../lib/realtime-task.mjs';
+import { approvedTaskWriter, readTaskProposal, taskApproval, taskSpeech } from '../lib/realtime-task.mjs';
+import { CONFIRMATION_TIMEOUT_MS } from '../lib/voice-confirmation.mjs';
 
-type Phase = 'listening' | 'capturing' | 'thinking' | 'saving' | 'speaking';
+type Phase = 'listening' | 'capturing' | 'thinking' | 'confirming' | 'saving' | 'speaking';
 type Action = (params: Record<string, unknown>) => Promise<unknown>;
 type EventItem = { type?: string; name?: string; call_id?: string; arguments?: string };
 type RealtimeEvent = {
   type?: string;
+  item_id?: string;
+  response_id?: string;
   transcript?: string;
-  response?: { status?: string; output?: EventItem[] };
+  response?: { id?: string; metadata?: Record<string, string>; status?: string; output?: EventItem[] };
+};
+type PendingTasks = {
+  proposalId: string;
+  tasks: ReturnType<typeof readTaskProposal>;
+  questionId?: string;
+  asked?: boolean;
+  inputId?: string;
+  committed?: boolean;
 };
 
 export function startRealtimeConversation(options: {
@@ -18,13 +29,14 @@ export function startRealtimeConversation(options: {
   onPhase: (phase: Phase) => void;
   onMicLevel: (level: number) => void;
   onReply: (text: string) => void;
-  onTask: (identifier: string) => void;
+  onTasks: (identifiers: string[]) => void;
   onError: (error: unknown) => void;
   onPlaybackBlocked: (blocked: boolean) => void;
   waitCue: () => Promise<void>;
 }) {
   const { companyId, agentId, language } = options;
-  const task = realtimeTaskHandler({ companyId, agentId });
+  const writeTasks = approvedTaskWriter({ companyId, agentId });
+  const speech = taskSpeech(language);
   const audio = new Audio();
   audio.autoplay = true;
   audio.setAttribute('playsinline', '');
@@ -39,8 +51,11 @@ export function startRealtimeConversation(options: {
   let stopped = false;
   let talking = false;
   let responding = false;
-  let waitingForTool = 0;
+  let saving = false;
   let speechTurns = 0;
+  let pendingTasks: PendingTasks | undefined;
+  let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
+  let queuedResponse: Record<string, unknown> | undefined;
   const startup = setTimeout(() => fail(new Error('Die Audioverbindung konnte nicht rechtzeitig starten.')), 30_000);
 
   function release(id: string) {
@@ -52,6 +67,7 @@ export function startRealtimeConversation(options: {
     stopped = true;
     clearTimeout(startup);
     clearTimeout(disconnected);
+    clearPendingTasks();
     clearInterval(meter);
     void meterContext?.close().catch(() => undefined);
     stream?.getTracks().forEach(track => track.stop());
@@ -78,42 +94,97 @@ export function startRealtimeConversation(options: {
     if (!stopped && channel.readyState === 'open') channel.send(JSON.stringify(event));
   }
 
-  async function handleTasks(items: EventItem[]) {
-    const id = sessionId;
-    if (!id || stopped) return;
+  function reply(response: Record<string, unknown> = {}) {
+    if (responding) { queuedResponse = response; return; }
+    responding = true;
+    options.onPhase('thinking');
+    send({ type: 'response.create', response });
+  }
+
+  function say(text: string, proposalId?: string) {
+    reply({
+      tool_choice: 'none',
+      instructions: `Speak only this sentence or message, exactly as written: ${JSON.stringify(text)}`,
+      ...(proposalId ? { metadata: { proposalId } } : {}),
+    });
+  }
+
+  function setApprovalTranscription(enabled: boolean) {
+    send({ type: 'session.update', session: {
+      type: 'realtime', audio: { input: { transcription: enabled ? { model: 'gpt-4o-mini-transcribe' } : null } },
+    } });
+  }
+
+  function clearPendingTasks() {
+    clearTimeout(confirmationTimer);
+    if (pendingTasks) setApprovalTranscription(false);
+    pendingTasks = undefined;
+  }
+
+  function countDownConfirmation() {
+    clearTimeout(confirmationTimer);
+    confirmationTimer = setTimeout(() => {
+      clearPendingTasks();
+      if (!stopped && !talking && !saving) options.onPhase('listening');
+    }, CONFIRMATION_TIMEOUT_MS);
+  }
+
+  function proposeTasks(items: EventItem[]) {
     const calls = items.filter(item => item.type === 'function_call' && typeof item.call_id === 'string' && !seen.has(item.call_id));
     if (!calls.length) return;
+    const call = calls[0];
+    const proposalId = call.call_id!;
+    const tasks = calls.length === 1 && call.name === 'propose_tasks' && /^[a-zA-Z0-9_-]{1,160}$/.test(proposalId) && !talking && !saving
+      ? readTaskProposal(call.arguments) : [];
+    for (const item of calls) {
+      const callId = item.call_id!;
+      seen.add(callId);
+      send({ type: 'conversation.item.create', item: {
+        type: 'function_call_output', call_id: callId,
+        output: JSON.stringify(tasks.length ? { status: 'awaiting_approval', count: tasks.length } : { status: 'not_proposed' }),
+      } });
+    }
+    if (tasks.length) {
+      clearPendingTasks();
+      pendingTasks = { proposalId, tasks };
+      setApprovalTranscription(true);
+      countDownConfirmation();
+      say(speech.ask(tasks.length), proposalId);
+    } else if (!talking && !saving) reply();
+  }
+
+  async function saveApproved(draft: PendingTasks) {
+    const id = sessionId;
+    if (!id || stopped) return;
     const turn = speechTurns;
-    waitingForTool++;
+    saving = true;
     options.onPhase('saving');
     let cue: Promise<void> | undefined;
     const timer = setTimeout(() => {
       if (!stopped && speechTurns === turn && !talking) cue = options.waitCue().catch(() => undefined);
     }, 1600);
     try {
-      const results = await Promise.all(calls.map(async item => {
-        const callId = item.call_id!;
-        seen.add(callId);
-        const result = item.name !== 'create_task' || typeof item.arguments !== 'string' || talking
-          ? { status: 'no_action' }
-          : await task(id, callId, item.arguments);
-        return { callId, result };
-      }));
+      const { identifiers, unknownCount } = await writeTasks(id, draft.proposalId, draft.tasks);
       clearTimeout(timer);
       await cue;
       if (stopped) return;
-      for (const { callId, result } of results) {
-        if (result.status === 'created' && 'identifier' in result) options.onTask(result.identifier);
-        send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) } });
-      }
-      if (speechTurns === turn && !talking && !responding) {
-        options.onPhase('thinking');
-        send({ type: 'response.create' });
-      }
+      if (identifiers.length) options.onTasks(identifiers);
+      if (speechTurns === turn && !talking) say([identifiers.length ? speech.receipt(identifiers) : '', unknownCount ? speech.unknown : ''].filter(Boolean).join(' '));
     } finally {
       clearTimeout(timer);
-      waitingForTool--;
+      saving = false;
     }
+  }
+
+  function handleApproval(itemId: string | undefined, transcript: string | undefined) {
+    const draft = pendingTasks;
+    if (!draft?.committed || draft.inputId !== itemId) return;
+    clearPendingTasks();
+    if (transcript === undefined) { say(speech.unclear); return; }
+    const decision = taskApproval(transcript, language);
+    if (decision === 'approve') void saveApproved(draft).catch(fail);
+    else if (decision === 'discard') say(speech.declined);
+    else reply();
   }
 
   channel.onopen = () => {
@@ -132,6 +203,9 @@ export function startRealtimeConversation(options: {
       case 'input_audio_buffer.speech_started':
         talking = true;
         speechTurns++;
+        queuedResponse = undefined;
+        if (pendingTasks?.asked && !pendingTasks.inputId && event.item_id) pendingTasks.inputId = event.item_id;
+        else clearPendingTasks();
         options.onPhase('capturing');
         break;
       case 'input_audio_buffer.speech_stopped':
@@ -139,11 +213,38 @@ export function startRealtimeConversation(options: {
         options.onMicLevel(0);
         options.onPhase('thinking');
         break;
-      case 'response.created': responding = true; break;
+      case 'input_audio_buffer.committed':
+        if (event.item_id && pendingTasks?.inputId === event.item_id) {
+          pendingTasks.committed = true;
+          clearTimeout(confirmationTimer);
+          confirmationTimer = setTimeout(() => handleApproval(event.item_id, undefined), 6000);
+        } else reply();
+        break;
+      case 'conversation.item.input_audio_transcription.completed':
+        handleApproval(event.item_id, event.transcript);
+        break;
+      case 'conversation.item.input_audio_transcription.failed':
+        handleApproval(event.item_id, undefined);
+        break;
+      case 'response.created':
+        responding = true;
+        if (pendingTasks && event.response?.metadata?.proposalId === pendingTasks.proposalId && event.response.id) {
+          pendingTasks.questionId = event.response.id;
+        }
+        break;
       case 'output_audio_buffer.started': options.onPhase('speaking'); break;
-      case 'output_audio_buffer.stopped':
+      case 'output_audio_buffer.stopped': {
+        if (pendingTasks && event.response_id && event.response_id === pendingTasks.questionId && !talking) {
+          pendingTasks.asked = true;
+          countDownConfirmation();
+          options.onPhase('confirming');
+          break;
+        }
+        if (!talking) options.onPhase(saving ? 'saving' : 'listening');
+        break;
+      }
       case 'output_audio_buffer.cleared':
-        if (!talking) options.onPhase(waitingForTool ? 'saving' : 'listening');
+        if (!talking) options.onPhase(saving ? 'saving' : 'listening');
         break;
       case 'response.output_audio_transcript.done':
         if (typeof event.transcript === 'string') options.onReply(event.transcript);
@@ -151,9 +252,14 @@ export function startRealtimeConversation(options: {
       case 'response.done':
         responding = false;
         if (event.response?.status === 'completed') {
-          void handleTasks(event.response.output ?? []).catch(fail);
+          proposeTasks(event.response.output ?? []);
         } else if (event.response?.status === 'failed' || event.response?.status === 'incomplete') {
           fail(new Error('OpenAI Realtime konnte die Antwort nicht fertigstellen.'));
+        }
+        if (queuedResponse && !responding && !talking) {
+          const next = queuedResponse;
+          queuedResponse = undefined;
+          reply(next);
         }
         break;
       case 'error': fail(new Error('OpenAI Realtime meldet einen Gesprächsfehler.')); break;

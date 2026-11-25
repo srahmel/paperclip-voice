@@ -9,27 +9,36 @@ export function realtimeConfig({ language, voice }) {
     tracing: null,
     instructions: [
       `Start in ${VOICE_LANGUAGES[language]}. Use the user's language if they switch.`,
-      'You are Paperclip Voice. Respond to the user naturally and promptly. Answer questions and discuss options conversationally. Do not repeat the user’s words or ask for routine confirmation.',
-      'Treat brainstorming, suggestions, hypotheticals and questions as conversation. Call create_task only after the user has expressed a clear intention to have a Paperclip task created and the desired work is clear. An unambiguous request with enough detail is sufficient. If the intention or a material detail is unclear, ask a short question.',
+      'You are Paperclip Voice. Respond naturally and promptly. Answer questions directly and discuss options with the user. Never play back, quote or paraphrase the user’s message as an acknowledgment. Do not interrupt the discussion to ask whether to send a message.',
+      'Treat brainstorming, suggestions, hypotheticals and questions as conversation. Once the discussion establishes intent to hand off one or more concrete tasks, call propose_tasks once with the complete set. If an important detail is missing, ask a focused follow-up question. The app will speak a brief approval question after receiving the proposal.',
       'The selected Paperclip agent will receive the task. Never imply you are that agent or that you have read their chats or tasks. If the user wants a different assignee, ask them to select that agent in the panel before saving.',
-      'When saving a task, do not announce success until the tool returns created. State the returned identifier. If the tool reports an unknown outcome, say it could not be confirmed and do not try to create it again.',
+      'Proposing tasks does not save them. The app handles approval and reports the Paperclip results. Having discussed a task or having had it proposed never means it was saved.',
       'Use only information the user has given or verified tool results. Do not invent deadlines, task status, or external actions.',
     ].join('\n'),
     audio: {
       input: {
         noise_reduction: { type: 'near_field' },
-        turn_detection: { type: 'semantic_vad', eagerness: 'high', create_response: true, interrupt_response: true },
+        transcription: null,
+        turn_detection: { type: 'semantic_vad', eagerness: 'high', create_response: false, interrupt_response: true },
       },
       output: { voice },
     },
     tools: [{
-      type: 'function', name: 'create_task',
-      description: 'Create one task assigned to the selected agent when the user clearly intends it and the work is clear.',
+      type: 'function', name: 'propose_tasks',
+      description: 'Prepare the concrete tasks agreed in the conversation for one spoken approval. Does not save tasks.',
       parameters: {
-        type: 'object', additionalProperties: false, required: ['title', 'description'],
+        type: 'object', additionalProperties: false, required: ['tasks'],
         properties: {
-          title: { type: 'string', description: 'Short title for the agreed task.' },
-          description: { type: 'string', description: 'Agreed work and relevant details, in the user’s language.' },
+          tasks: {
+            type: 'array', minItems: 1, maxItems: 10,
+            items: {
+              type: 'object', additionalProperties: false, required: ['title', 'description'],
+              properties: {
+                title: { type: 'string', description: 'Short title for the agreed task.' },
+                description: { type: 'string', description: 'Agreed work and relevant details, in the user’s language.' },
+              },
+            },
+          },
         },
       },
     }],

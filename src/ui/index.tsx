@@ -99,7 +99,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const [mode, setModeState] = useState<'conversation' | 'dictation' | 'read'>('conversation');
   const [generalLauncher, setGeneralLauncher] = useState(false);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
-  const [createdTask, setCreatedTask] = useState('');
+  const [createdTasks, setCreatedTasks] = useState<string[]>([]);
   const realtimeMode = mode === 'conversation' && generalLauncher && health.data?.realtime === true;
   const modeRef = useRef(mode);
   const draftRef = useRef<DraftBinding | null>(null);
@@ -223,7 +223,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       const issueId = typeof detail.issueId === 'string' ? detail.issueId : undefined;
       const next = voiceSessionTarget(pathname, companyId, issueId) as Target | null;
       draftRef.current = null; setMode('conversation');
-      teardown(); setGeneralLauncher(!issueId); setTarget(next); setCreatedTask(''); setLastReply(''); setError(null); setOpened(true);
+      teardown(); setGeneralLauncher(!issueId); setTarget(next); setCreatedTasks([]); setLastReply(''); setError(null); setOpened(true);
     };
     window.addEventListener('paperclip-voice-open', open);
     window.addEventListener('paperclip-voice-open-task', open);
@@ -743,7 +743,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     teardown();
     setError(null);
     setLastReply('');
-    setCreatedTask('');
+    setCreatedTasks([]);
     setPhase('starting');
     const epoch = epochRef.current;
     sessionPathRef.current = window.location.pathname;
@@ -774,7 +774,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           if (next === 'capturing') playingSourceRef.current?.stop();
           setPhase(next);
         },
-        onMicLevel: showMicLevel, onReply: setLastReply, onTask: setCreatedTask, onError,
+        onMicLevel: showMicLevel, onReply: setLastReply, onTasks: setCreatedTasks, onError,
         onPlaybackBlocked: setPlaybackBlocked,
         waitCue: () => waitClip ? playDecoded(waitClip, () => active(epoch) && phaseRef.current === 'saving') : Promise.resolve(),
       });
@@ -821,10 +821,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         <h2 style={P.title}>{mode === 'dictation' ? 'Diktat' : mode === 'read' ? 'Antwort vorlesen' : 'Sprachmodus'}</h2>
         <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : realtimeMode ? 'Sprich mit Voice. Wenn gemeinsam klar ist, was zu tun ist, bekommt der ausgewählte Agent die Aufgabe. Das Gesprächsaudio wird an OpenAI übertragen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
+      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : realtimeMode ? 'Sprich mit Voice. Vor dem Anlegen der besprochenen Aufgaben fragt Voice einmal nach. Das Gesprächsaudio wird an OpenAI übertragen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
       <p style={{ ...P.muted, margin: '12px 0', display: 'flex', alignItems: 'center', gap: 8 }} role="status">
         {(['listening', 'capturing', 'confirming'].includes(phase)) && <MicrophoneWave level={micLevel} capturing={phase === 'capturing'} />}
-        {({ off: 'Bereit zum Starten', starting: realtimeMode ? 'Sprachverbindung wird aufgebaut …' : 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', thinking: 'Voice antwortet gleich …', saving: 'Aufgabe wird gespeichert …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
+        {({ off: 'Bereit zum Starten', starting: realtimeMode ? 'Sprachverbindung wird aufgebaut …' : 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: realtimeMode ? 'Warte auf deine Freigabe …' : 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', thinking: 'Voice antwortet gleich …', saving: 'Paperclip speichert …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
       </p>
       {!realtimeMode && <p style={P.muted}>Lokale Spracherkennung: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Nicht erreichbar'}</p>}
       <label htmlFor="voice-language">Sprache</label>
@@ -863,7 +863,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
         {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { if (modeRef.current !== 'dictation') { teardown(); setPhase('error'); } setError(friendlyError(cause)); })}>{mode === 'dictation' ? 'In Eingabe übernehmen' : 'Transkript absenden'}</button>}
       </div>
-      {realtimeMode && createdTask && <p role="status">Aufgabe {createdTask} angelegt.</p>}
+      {realtimeMode && createdTasks.length > 0 && <p role="status">{createdTasks.length === 1 ? 'Aufgabe' : 'Aufgaben'} {createdTasks.join(', ')} angelegt.</p>}
       {lastTranscript && <div style={{ marginTop: 12 }}><strong>{pendingConfirmationRef.current ? 'Entwurf zur Bestätigung' : 'Zuletzt verstanden'}</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
       {lastReply && <div style={{ marginTop: 10, maxHeight: 140, overflowY: 'auto' }}><strong>Letzte Antwort</strong><p style={{ ...P.muted, whiteSpace: 'pre-wrap' }}>{lastReply.slice(0, 1300)}{lastReply.length > 1300 ? ' …' : ''}</p></div>}
       {error && <p role="alert" style={{ color: 'var(--destructive)', padding: '8px 0', whiteSpace: 'pre-wrap' }}>{error}</p>}
