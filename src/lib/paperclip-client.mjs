@@ -5,7 +5,7 @@
  * Caller owns retries. In particular, comment POST errors may have an unknown
  * commit outcome and must NEVER be retried automatically.
  */
-export async function paperclipApi(path, { method = 'GET', body, doFetch = fetch } = {}) {
+export async function paperclipApi(path, { method = 'GET', body, doFetch = fetch, signal } = {}) {
   if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
     throw new Error('Invalid Paperclip API path');
   }
@@ -13,6 +13,7 @@ export async function paperclipApi(path, { method = 'GET', body, doFetch = fetch
     method,
     credentials: 'include',
     cache: 'no-store',
+    ...(signal ? { signal } : {}),
     headers: { 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -94,4 +95,16 @@ export function postNativeComment(issueId, message, clientRequestId, doFetch = f
   return paperclipApi(`/issues/${encodeURIComponent(issueId)}/comments`, {
     method: 'POST', body: { body: message, clientRequestId }, doFetch,
   });
+}
+
+export async function createNativeVoiceTask({ companyId, agentId, title, description, idempotencyKey, doFetch = fetch }) {
+  if (!companyId || !agentId || !idempotencyKey) throw new Error('Missing task scope');
+  const issue = await paperclipApi(`/companies/${encodeURIComponent(companyId)}/issues`, {
+    method: 'POST', doFetch, signal: AbortSignal.timeout(15_000),
+    body: { title, description, assigneeAgentId: agentId, status: 'todo', idempotencyKey },
+  });
+  if (!issue?.id || typeof issue.identifier !== 'string' || !issue.identifier.trim() || issue.companyId !== companyId || issue.assigneeAgentId !== agentId) {
+    throw new Error('Paperclip did not confirm the task.');
+  }
+  return { status: 'created', identifier: issue.identifier };
 }

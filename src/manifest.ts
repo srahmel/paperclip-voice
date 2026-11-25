@@ -6,21 +6,32 @@ const advanced = { 'x-paperclip-advanced': true };
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.3.7',
+  version: '0.4.0',
   displayName: 'Paperclip Voice (Local)',
-  description: 'Talk with existing Paperclip agents using local Whisper, Piper and optional German streaming speech recognition.',
+  description: 'Have a live voice conversation with OpenAI Realtime or dictate locally into Paperclip tasks.',
   author: 'paperclip-voice contributors',
   categories: ['ui'],
   capabilities: [
     'issues.read',
     'issue.comments.read',
     'http.outbound',
+    'secrets.read-ref',
     'ui.action.register',
   ],
   entrypoints: { worker: './dist/worker.js', ui: './dist/ui' },
   instanceConfigSchema: {
     type: 'object',
     properties: {
+      generalVoiceBackend: {
+        type: 'string', title: 'General voice mode', enum: ['local', 'openai'], default: 'local',
+        description: 'OpenAI handles the live conversation. Task dictation continues to use the local audio engine.',
+      },
+      realtimeApiKey: { type: 'string', format: 'secret-ref', title: 'OpenAI Realtime API key' },
+      realtimeRegion: {
+        type: 'string', title: 'OpenAI processing region', enum: ['eu', 'global'], default: 'eu',
+        description: 'EU requires a compatible OpenAI project. The plugin uses the selected region only.',
+      },
+      realtimeVoice: { type: 'string', title: 'OpenAI Realtime voice', enum: ['marin', 'cedar', 'coral', 'verse'], default: 'marin' },
       backend: { ...advanced, type: 'string', title: 'Local audio engine', enum: ['python', 'voicebox'], default: 'python' },
       windowsSystemRoot: { ...advanced, type: 'string', title: 'Windows system directory', description: 'SystemRoot for the local Python processes on Windows.' },
       sttPython: { ...advanced, type: 'string', title: 'Whisper Python executable', description: 'Leave empty to use the existing PAPERCLIP_VOICE_PYTHON setting.' },

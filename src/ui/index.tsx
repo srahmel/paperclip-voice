@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useHostLocation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
-import { createSpeechDetector, DEFAULT_SPEECH_LEVEL, rememberVoiceAgent, routeTarget, vadDecision, voiceMessage, voiceSessionTarget, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
+import { createSpeechDetector, DEFAULT_SPEECH_LEVEL, rememberVoiceAgent, realtimeAgentTarget, routeTarget, vadDecision, voiceMessage, voiceSessionTarget, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
 import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeAgentChat, listVoiceTargets, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
 import { appendDictation, useVoiceMounts, type DraftBinding } from './composer-mounts';
 import { VoiceIcon } from './voice-icons';
 import { startLocalConversation } from './local-conversation';
+import { startRealtimeConversation } from './realtime-conversation';
 import { CONFIRMATION_TIMEOUT_MS, MAX_CONFIRMATION_CHARS, voiceConfirmationDecision } from '../lib/voice-confirmation.mjs';
 
-type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'capturing' | 'transcribing' | 'confirming' | 'review' | 'sending' | 'submitted' | 'waiting' | 'speaking' | 'error';
+type Phase = 'off' | 'starting' | 'ready' | 'listening' | 'capturing' | 'transcribing' | 'confirming' | 'review' | 'sending' | 'submitted' | 'waiting' | 'speaking' | 'thinking' | 'saving' | 'error';
 type Target = { kind: 'chat' | 'issue'; ref: string };
 type PendingConfirmation = { text: string; target: Target; expiresAt: number };
 type Comment = { id: string; authorAgentId?: string | null; authorType?: string; deletedAt?: string | null; body?: string };
@@ -86,14 +87,20 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const cancel = usePluginAction('voice-cancel');
   const startStream = usePluginAction('voice-stream-start');
   const updateStream = usePluginAction('voice-stream-update');
+  const connectRealtime = usePluginAction('voice-realtime-connect');
+  const disconnectRealtime = usePluginAction('voice-realtime-disconnect');
   type VoiceLanguage = keyof typeof VOICE_LANGUAGES;
-  const health = usePluginData<{ ready: boolean; streamingReady?: boolean; language?: VoiceLanguage }>('voice-health', { companyId });
+  const health = usePluginData<{ ready: boolean; streamingReady?: boolean; realtime?: boolean; language?: VoiceLanguage }>('voice-health', { companyId });
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
   const { pathname } = useHostLocation();
   const { drafts, navigation } = useVoiceMounts(companyId, pathname);
   const [mode, setModeState] = useState<'conversation' | 'dictation' | 'read'>('conversation');
+  const [generalLauncher, setGeneralLauncher] = useState(false);
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const [createdTask, setCreatedTask] = useState('');
+  const realtimeMode = mode === 'conversation' && generalLauncher && health.data?.realtime === true;
   const modeRef = useRef(mode);
   const draftRef = useRef<DraftBinding | null>(null);
   const [targetOptions, setTargetOptions] = useState<Array<Target & { label: string }>>([]);
@@ -129,6 +136,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const seenCommentIdsRef = useRef<Set<string>>(new Set());
   const activeIssueIdRef = useRef<string | null>(null);
   const localConversationRef = useRef<(() => void) | null>(null);
+  const realtimeConversationRef = useRef<ReturnType<typeof startRealtimeConversation> | null>(null);
   const handsFreeRef = useRef(false);
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
   const confirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,6 +165,9 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     sessionPathRef.current = null;
     localConversationRef.current?.();
     localConversationRef.current = null;
+    realtimeConversationRef.current?.stop();
+    realtimeConversationRef.current = null;
+    setPlaybackBlocked(false);
     handsFreeRef.current = false;
     clearConfirmation();
     voiceOrderSinceRef.current = null;
@@ -209,14 +220,19 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       if (detail?.companyId !== companyId) return;
-      const next = voiceSessionTarget(pathname, companyId, typeof detail.issueId === 'string' ? detail.issueId : undefined) as Target | null;
+      const issueId = typeof detail.issueId === 'string' ? detail.issueId : undefined;
+      const next = voiceSessionTarget(pathname, companyId, issueId) as Target | null;
       draftRef.current = null; setMode('conversation');
-      teardown(); setTarget(next); setError(null); setOpened(true);
+      teardown(); setGeneralLauncher(!issueId); setTarget(next); setCreatedTask(''); setLastReply(''); setError(null); setOpened(true);
     };
     window.addEventListener('paperclip-voice-open', open);
     window.addEventListener('paperclip-voice-open-task', open);
     return () => { window.removeEventListener('paperclip-voice-open', open); window.removeEventListener('paperclip-voice-open-task', open); };
   }, [companyId, pathname, teardown]);
+
+  useEffect(() => {
+    if (opened && realtimeMode) setTarget(realtimeAgentTarget(pathname, companyId) as Target | null);
+  }, [opened, realtimeMode, pathname, companyId]);
 
   useEffect(() => {
     if (!opened || !companyId || mode !== 'conversation') return;
@@ -713,6 +729,58 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     }
   }
 
+  function startRealtimeSession() {
+    if (!realtimeMode || !['off', 'error'].includes(phaseRef.current)) return;
+    const selected = targetRef.current;
+    if (selected?.kind !== 'chat' || !targetOptions.some(option => option.kind === 'chat' && option.ref === selected.ref)) {
+      setError('Wähle zuerst einen Agenten für mögliche Aufgaben.');
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
+      setError('Dieser Browser unterstützt kein WebRTC mit sicherem Mikrofonzugriff.');
+      return;
+    }
+    teardown();
+    setError(null);
+    setLastReply('');
+    setCreatedTask('');
+    setPhase('starting');
+    const epoch = epochRef.current;
+    sessionPathRef.current = window.location.pathname;
+    sessionActiveRef.current = true;
+    rememberVoiceAgent(companyId, selected.ref);
+    let waitClip: AudioBuffer | undefined;
+    if (health.data?.ready && typeof AudioContext !== 'undefined') {
+      try {
+        const ctx = new AudioContext();
+        audioContextRef.current = ctx;
+        void ctx.resume().then(() => audioJob<AudioResult>(speakStatus, { status: 'waiting', language }, epoch)).then(async result => {
+          if (active(epoch) && result.audioBase64) waitClip = await ctx.decodeAudioData(audioBase64ToBuffer(result.audioBase64));
+        }).catch(() => undefined);
+      } catch { /* A missing wait clip must not delay the conversation. */ }
+    }
+    const onError = (cause: unknown) => {
+      if (!active(epoch)) return;
+      teardown();
+      setError(friendlyError(cause));
+      setPhase('error');
+    };
+    try {
+      realtimeConversationRef.current = startRealtimeConversation({
+        companyId, agentId: selected.ref, language,
+        connect: connectRealtime, disconnect: disconnectRealtime,
+        onPhase(next) {
+          if (!active(epoch)) return;
+          if (next === 'capturing') playingSourceRef.current?.stop();
+          setPhase(next);
+        },
+        onMicLevel: showMicLevel, onReply: setLastReply, onTask: setCreatedTask, onError,
+        onPlaybackBlocked: setPlaybackBlocked,
+        waitCue: () => waitClip ? playDecoded(waitClip, () => active(epoch) && phaseRef.current === 'saving') : Promise.resolve(),
+      });
+    } catch (cause) { onError(cause); }
+  }
+
   function openDictation(binding: DraftBinding): void {
     teardown(); draftRef.current = binding; setMode('dictation');
     setError(null); setLastTranscript(''); setLastReply(''); setOpened(true);
@@ -742,7 +810,8 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   const targetLabel = mode === 'dictation' ? 'Diktat für diese Eingabe – kein automatischer Versand' : target ? (targetOptions.find(option => option.kind === target.kind && option.ref === target.ref)?.label ?? (target.kind === 'issue' ? `Aufgabe ${target.ref.slice(0, 8)}` : 'Ausgewählter Chat')) : 'Kein Ziel';
   const canStart = phase === 'off' || phase === 'error' || phase === 'submitted';
-  const canStartHandsFree = canStart && mode === 'conversation' && health.data?.ready === true;
+  const canStartHandsFree = canStart && !realtimeMode && mode === 'conversation' && health.data?.ready === true;
+  const visibleTargets = realtimeMode ? targetOptions.filter(option => option.kind === 'chat') : targetOptions;
   const handsFreeActive = handsFreeRef.current;
   const iconButton: CSSProperties = { width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: 8, cursor: 'pointer' };
   const panelHost = mode === 'dictation' ? draftRef.current?.root.closest<HTMLElement>('[role="dialog"]') : null;
@@ -752,26 +821,26 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         <h2 style={P.title}>{mode === 'dictation' ? 'Diktat' : mode === 'read' ? 'Antwort vorlesen' : 'Sprachmodus'}</h2>
         <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
+      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : realtimeMode ? 'Sprich mit Voice. Wenn gemeinsam klar ist, was zu tun ist, bekommt der ausgewählte Agent die Aufgabe. Das Gesprächsaudio wird an OpenAI übertragen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
       <p style={{ ...P.muted, margin: '12px 0', display: 'flex', alignItems: 'center', gap: 8 }} role="status">
         {(['listening', 'capturing', 'confirming'].includes(phase)) && <MicrophoneWave level={micLevel} capturing={phase === 'capturing'} />}
-        {({ off: 'Bereit zum Starten', starting: 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
+        {({ off: 'Bereit zum Starten', starting: realtimeMode ? 'Sprachverbindung wird aufgebaut …' : 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', thinking: 'Voice antwortet gleich …', saving: 'Aufgabe wird gespeichert …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
       </p>
-      <p style={P.muted}>Lokale Spracherkennung: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Nicht erreichbar'}</p>
+      {!realtimeMode && <p style={P.muted}>Lokale Spracherkennung: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Nicht erreichbar'}</p>}
       <label htmlFor="voice-language">Sprache</label>
       <select id="voice-language" style={P.field} value={language} disabled={!canStart} onChange={(event) => setLanguageChoice({ companyId, language: event.target.value as VoiceLanguage })}>
         {Object.entries(VOICE_LANGUAGES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
-      <p style={P.muted}>Aktueller Chat: {targetLabel}</p>
-      {mode === 'conversation' && <label>Chat oder Aufgabe<select aria-label="Chat oder Aufgabe" style={P.field} disabled={!canStart} value={target ? `${target.kind}:${target.ref}` : ''} onChange={event => {
-        const selected = targetOptions.find(option => `${option.kind}:${option.ref}` === event.target.value);
+      {!realtimeMode && <p style={P.muted}>Aktueller Chat: {targetLabel}</p>}
+      {mode === 'conversation' && <label>{realtimeMode ? 'Agent für Aufgaben' : 'Chat oder Aufgabe'}<select style={P.field} disabled={!canStart} value={target ? `${target.kind}:${target.ref}` : ''} onChange={event => {
+        const selected = visibleTargets.find(option => `${option.kind}:${option.ref}` === event.target.value);
         if (selected?.kind === 'chat' || !selected) rememberVoiceAgent(companyId, selected?.ref);
         setTarget(selected ?? null);
       }}><option value="">Bitte wählen …</option>
-        {target && !targetOptions.some(option => option.kind === target.kind && option.ref === target.ref) && <option value={`${target.kind}:${target.ref}`}>{targetLabel}</option>}
-        {targetOptions.map(option => <option key={`${option.kind}:${option.ref}`} value={`${option.kind}:${option.ref}`}>{option.label}</option>)}
+        {target && !visibleTargets.some(option => option.kind === target.kind && option.ref === target.ref) && <option value={`${target.kind}:${target.ref}`}>{targetLabel}</option>}
+        {visibleTargets.map(option => <option key={`${option.kind}:${option.ref}`} value={`${option.kind}:${option.ref}`}>{realtimeMode ? option.label.replace(/^Chat: /, '') : option.label}</option>)}
       </select></label>}
-      {mode !== 'read' && <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
+      {mode !== 'read' && !realtimeMode && <details style={{ margin: '12px 0', color: 'var(--muted-foreground)', fontSize: 13 }}>
       <summary style={{ cursor: 'pointer', padding: '5px 0' }}>Optionen</summary>
       {mode === 'conversation' && <>
         <label style={{ display: 'block', marginBottom: 7 }}><input type="checkbox" checked={handsFreeActive || autoContinue} disabled={handsFreeActive} onChange={(event) => { autoContinueRef.current = event.target.checked; setAutoContinue(event.target.checked); }} /> Nach Antwort weiter zuhören</label>
@@ -786,12 +855,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
       }} style={{ display: 'block', maxWidth: '100%', margin: '6px 0' }} />
       </details>}
       <div>
+        {canStart && realtimeMode && <button type="button" style={P.primary} onClick={startRealtimeSession}>Gespräch starten</button>}
+        {realtimeMode && playbackBlocked && <button type="button" style={P.button} onClick={() => void realtimeConversationRef.current?.play()}>Ton aktivieren</button>}
         {canStartHandsFree && <button type="button" style={P.primary} onClick={() => void startSession(true)}>Freisprechen starten</button>}
-        {canStart && mode !== 'read' ? <button type="button" style={canStartHandsFree ? P.button : P.primary} onClick={() => void startSession()}>{mode === 'dictation' ? 'Diktat starten' : 'Aufnahme mit Vorschau starten'}</button> : null}
+        {canStart && mode !== 'read' && !realtimeMode ? <button type="button" style={canStartHandsFree ? P.button : P.primary} disabled={generalLauncher && mode === 'conversation' && health.loading} onClick={() => void startSession()}>{mode === 'dictation' ? 'Diktat starten' : 'Aufnahme mit Vorschau starten'}</button> : null}
         {phase !== 'off' && <button type="button" style={P.button} onClick={() => { teardown(); setError(null); }}>Stoppen</button>}
         {phase === 'ready' && streamRef.current && <button type="button" style={P.button} onClick={() => { const epoch = epochRef.current; void startCapture(epoch); }}>Weitere Anweisung</button>}
         {phase === 'review' && <button type="button" style={P.button} onClick={() => void submitTranscript(lastTranscript, epochRef.current).catch(cause => { if (modeRef.current !== 'dictation') { teardown(); setPhase('error'); } setError(friendlyError(cause)); })}>{mode === 'dictation' ? 'In Eingabe übernehmen' : 'Transkript absenden'}</button>}
       </div>
+      {realtimeMode && createdTask && <p role="status">Aufgabe {createdTask} angelegt.</p>}
       {lastTranscript && <div style={{ marginTop: 12 }}><strong>{pendingConfirmationRef.current ? 'Entwurf zur Bestätigung' : 'Zuletzt verstanden'}</strong><textarea style={{ ...P.field, minHeight: 60 }} value={lastTranscript} onChange={(event) => setLastTranscript(event.target.value)} disabled={phase !== 'review'} /></div>}
       {lastReply && <div style={{ marginTop: 10, maxHeight: 140, overflowY: 'auto' }}><strong>Letzte Antwort</strong><p style={{ ...P.muted, whiteSpace: 'pre-wrap' }}>{lastReply.slice(0, 1300)}{lastReply.length > 1300 ? ' …' : ''}</p></div>}
       {error && <p role="alert" style={{ color: 'var(--destructive)', padding: '8px 0', whiteSpace: 'pre-wrap' }}>{error}</p>}

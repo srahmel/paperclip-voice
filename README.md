@@ -1,9 +1,8 @@
 # Paperclip Voice
 
-Local Whisper transcription and Piper speech for existing Paperclip tasks and
-agent chats. Version 0.2 uses the public plugin action bridge and app overlay.
-Plugin-owned JavaScript adds direct composer controls and a navigation entry;
-no Paperclip core patch is required.
+Paperclip Voice offers general conversations with OpenAI Realtime and local
+Whisper dictation and Piper speech for Paperclip tasks and chats. The plugin
+uses the Paperclip action bridge, app overlay, and native task API.
 
 ## Use
 
@@ -15,12 +14,32 @@ works in **New Task**. The adjacent speaker reads the latest accessible agent
 reply; reading never creates a new conversation.
 
 For a continuing voice conversation, select **Voice mode** directly below
-**Chat** in the left navigation. Choose an agent chat or a recent task when
-there is no current conversation. Voice remembers the last selected agent for
-each company in the current browser tab. Opening Voice from a task uses that
-task. Navigating away stops recording and
-playback. Closing the panel, stopping or disabling the plugin releases audio
-resources and cancels pending audio jobs.
+**Chat** in the left navigation. Voice remembers the last selected agent for
+each company in the current browser tab. Close the panel or select **Stoppen**
+to end the conversation and release the microphone. Navigating away also stops
+recording and playback.
+
+### OpenAI Realtime
+
+In the Voice plugin configuration select **openai** under **General voice mode**,
+bind **OpenAI Realtime API key** to a Paperclip company secret, and select the
+region matching the OpenAI project. **eu** is the default and requires an
+eligible EU project. **OpenAI Realtime voice** selects the conversation voice.
+The API key stays on the server. The browser streams live microphone audio to
+OpenAI over WebRTC, using billed OpenAI API usage. A call is limited to ten minutes.
+
+Select the agent for tasks and choose **Gespräch starten**. Discuss the work
+or ask questions in German, English, Dutch, or Norwegian Bokmål. Voice can
+create a task through the signed-in user's normal Paperclip permissions when
+the intended work is clear. The selected agent receives that task. Voice cites
+the Paperclip task number after the save succeeds. Ordinary conversation does
+not create a Paperclip chat or task. Voice has no access to agent chat history
+or existing tasks in a Realtime session.
+
+### Local conversations
+
+With **General voice mode** set to **local**, choose an agent chat or a recent
+task as the destination. Opening Voice from a task also uses the local flow.
 
 - Choose **Freisprechen starten**, then speak and pause. Voice reads back the
   transcript before sending a question or task. Say **Ja** or **Ja, senden**

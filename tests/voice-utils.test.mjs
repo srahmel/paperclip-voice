@@ -53,7 +53,10 @@ test('configuration shows language and voice selectors before advanced options',
   const essentialProperties = Object.entries(manifest.instanceConfigSchema.properties)
     .filter(([, property]) => !property['x-paperclip-advanced'])
     .map(([key]) => key);
-  assert.deepEqual(essentialProperties, ['language', 'voicePreset', 'englishVoicePreset', 'dutchVoicePreset', 'norwegianVoicePreset']);
+  assert.deepEqual(essentialProperties, [
+    'generalVoiceBackend', 'realtimeApiKey', 'realtimeRegion', 'realtimeVoice',
+    'language', 'voicePreset', 'englishVoicePreset', 'dutchVoicePreset', 'norwegianVoicePreset',
+  ]);
 });
 
 test('rejects untrusted audio types and oversized/malformed payloads', () => {

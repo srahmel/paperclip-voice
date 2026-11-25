@@ -39,6 +39,12 @@ test('hands-free stream actions require the matching human company and an instal
   await assert.rejects(update({ companyId: 'company-a', streamId: 'unknown', command: 'audio', audioBase64: 'AA==' }, auth), /not found/);
 });
 
+test('Realtime connections require a matching company user and explicit provider configuration', async () => {
+  const connect = actions.get('voice-realtime-connect');
+  await assert.rejects(connect({ companyId: 'company-b' }, auth), /authenticated company user/);
+  await assert.rejects(connect({ companyId: 'company-a' }, auth), /deaktiviert/);
+});
+
 test('shutdown retires pending audio jobs without replaying provider work', async () => {
   const { jobId } = await actions.get('voice-transcribe')(request, auth);
   await plugin.definition.onShutdown();

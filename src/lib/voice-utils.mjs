@@ -16,6 +16,10 @@ export const OTHER_VOICE_PRESETS = Object.freeze({
 });
 const DEFAULTS = Object.freeze({
   backend: 'python',
+  generalVoiceBackend: /** @type {'local' | 'openai'} */ ('local'),
+  realtimeRegion: /** @type {'eu' | 'global'} */ ('eu'),
+  realtimeVoice: /** @type {'marin' | 'cedar' | 'coral' | 'verse'} */ ('marin'),
+  realtimeApiKey: /** @type {import('@paperclipai/plugin-sdk').EnvSecretRefBinding | undefined} */ (undefined),
   voiceboxUrl: 'http://127.0.0.1:8790',
   language: 'de',
   voice: 'de_DE-thorsten-medium',
@@ -52,6 +56,9 @@ export function assertLocalVoiceboxUrl(value) {
 export function parseConfig(raw = {}) {
   const config = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
   if (!['python', 'voicebox'].includes(config.backend)) throw new Error('Invalid audio backend');
+  if (!['local', 'openai'].includes(config.generalVoiceBackend)) throw new Error('Invalid general voice backend');
+  if (!['eu', 'global'].includes(config.realtimeRegion)) throw new Error('Invalid OpenAI processing region');
+  if (!['marin', 'cedar', 'coral', 'verse'].includes(config.realtimeVoice)) throw new Error('Invalid OpenAI Realtime voice');
   for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot', 'moonshinePython', 'moonshineModelDir']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
   config.voiceboxUrl = assertLocalVoiceboxUrl(config.voiceboxUrl);
   if (!isVoiceLanguage(config.language)) throw new Error('Invalid speech language');
@@ -155,6 +162,11 @@ export function voiceSessionTarget(pathname, companyId, issueId, storage = undef
     if (agent && /^[a-z0-9_-]{1,128}$/i.test(agent)) return { kind: 'chat', ref: agent };
   } catch { /* The browser may block session storage. */ }
   return route;
+}
+
+export function realtimeAgentTarget(pathname, companyId, storage = undefined) {
+  const route = routeTarget(pathname);
+  return voiceSessionTarget(route?.kind === 'chat' ? pathname : '', companyId, undefined, storage);
 }
 
 export function rememberVoiceAgent(companyId, agentRef, storage = undefined) {

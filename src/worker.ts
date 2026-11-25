@@ -5,6 +5,7 @@ import { definePlugin, runWorker } from '@paperclipai/plugin-sdk';
 import { decodeBase64Audio, isAgentComment, isVoiceLanguage, parseConfig, voiceForLanguage } from './lib/voice-utils.mjs';
 import { extractVoiceTaskReceipt, voiceConfirmationPrompt, voiceConfirmationStatus } from './lib/voice-confirmation.mjs';
 import { spokenComment, synthesizeWithVoicebox, transcribeWithVoicebox, voiceboxHealth } from './lib/voicebox-client.mjs';
+import { createRealtimeCall, hangupRealtimeCall, REALTIME_SESSION_MS } from './lib/openai-realtime.mjs';
 
 type JobState = 'pending' | 'ready' | 'error';
 type AudioJob = {
@@ -33,6 +34,12 @@ type VoiceStream = {
   expiry?: ReturnType<typeof setTimeout>;
 };
 const streams = new Map<string, VoiceStream>();
+type RealtimeLease = {
+  sessionId: string;
+  close?: () => Promise<void>;
+  expiry?: ReturnType<typeof setTimeout>;
+};
+const realtimeLeases = new Map<string, RealtimeLease>();
 const STATUS_MESSAGES: Record<string, Record<string, string>> = {
   de: {
     submitted: 'Gesendet.',
@@ -127,11 +134,53 @@ const plugin = definePlugin({
     ctx.data.register('voice-health', async (params) => {
       const companyId = requiredString(params, 'companyId');
       const config = await configFor(companyId);
+      const realtime = config.generalVoiceBackend === 'openai';
       try {
         const ready = config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl });
-        return { ready, streamingReady: ready && localStreamReady(config), language: config.language };
+        return { ready, streamingReady: ready && localStreamReady(config), realtime, language: config.language };
       }
-      catch { return { ready: false, language: config.language }; }
+      catch { return { ready: false, realtime, language: config.language }; }
+    });
+
+    ctx.actions.register('voice-realtime-connect', async (params, auth) => {
+      const { companyId, ownerId } = requireScope(params, auth);
+      const config = await configFor(companyId);
+      if (config.generalVoiceBackend !== 'openai') throw new Error('OpenAI Realtime ist für diese Organisation deaktiviert.');
+      const ref = config.realtimeApiKey;
+      if (ref?.type !== 'secret_ref') throw new Error('In der Voice-Konfiguration fehlt der OpenAI-API-Schlüssel.');
+      const scope = `${companyId}/${ownerId}`;
+      if (realtimeLeases.has(scope) || realtimeLeases.size >= MAX_ACTIVE_JOBS) {
+        throw new Error('Es läuft bereits ein Sprachgespräch. Bitte zuerst beenden.');
+      }
+      const lease: RealtimeLease = { sessionId: randomUUID() };
+      realtimeLeases.set(scope, lease);
+      const resolveKey = () => ctx.secrets.resolve(ref, { companyId, configPath: 'realtimeApiKey' });
+      try {
+        const apiKey = await resolveKey().catch(() => { throw new Error('Der OpenAI-API-Schlüssel konnte nicht aus Paperclip geladen werden.'); });
+        const region = config.realtimeRegion;
+        const { callId, answer } = await createRealtimeCall({
+          offer: params.offer, region, language: allowedLanguage(params.language, config.language), voice: config.realtimeVoice, apiKey,
+        });
+        lease.close = async () => {
+          clearTimeout(lease.expiry);
+          try { await hangupRealtimeCall({ callId, region, apiKey: await resolveKey() }); }
+          catch { /* Closing the browser connection also disconnects WebRTC. */ }
+          finally { if (realtimeLeases.get(scope) === lease) realtimeLeases.delete(scope); }
+        };
+        lease.expiry = setTimeout(() => { void lease.close?.(); }, REALTIME_SESSION_MS);
+        lease.expiry.unref();
+        return { sessionId: lease.sessionId, answer };
+      } catch (error) {
+        realtimeLeases.delete(scope);
+        throw error;
+      }
+    });
+
+    ctx.actions.register('voice-realtime-disconnect', async (params, auth) => {
+      const { companyId, ownerId } = requireScope(params, auth);
+      const lease = realtimeLeases.get(`${companyId}/${ownerId}`);
+      if (lease && lease.sessionId === params.sessionId) await lease.close?.();
+      return { stopped: true };
     });
 
     ctx.actions.register('voice-stream-start', async (params, auth) => {
@@ -303,7 +352,8 @@ const plugin = definePlugin({
     for (const stream of activeStreams) stream.process.close();
     const pending = [...jobs.values()];
     for (const job of pending) job.controller.abort();
-    await Promise.all([...pending.map(job => job.settled), ...activeStreams.map(stream => stream.process.done)]);
+    await Promise.all([...pending.map(job => job.settled), ...activeStreams.map(stream => stream.process.done),
+      ...[...realtimeLeases.values()].map(lease => lease.close?.())]);
     jobs.clear();
   },
   async onHealth() { return { status: 'ok' }; },
