@@ -45,6 +45,13 @@ test('Realtime connections require a matching company user and explicit provider
   await assert.rejects(connect({ companyId: 'company-a' }, auth), /deaktiviert/);
 });
 
+test('Voice configuration testing tells the user how to attach the missing Realtime secret', async () => {
+  const missing = await plugin.definition.onValidateConfig({ generalVoiceBackend: 'openai' });
+  assert.equal(missing.ok, false);
+  assert.match(missing.errors[0], /Paperclip-Secret.*speichere/);
+  assert.equal((await plugin.definition.onValidateConfig({ generalVoiceBackend: 'local' })).ok, true);
+});
+
 test('shutdown retires pending audio jobs without replaying provider work', async () => {
   const { jobId } = await actions.get('voice-transcribe')(request, auth);
   await plugin.definition.onShutdown();

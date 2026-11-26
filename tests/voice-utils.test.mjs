@@ -49,14 +49,14 @@ test('language and voice dropdowns persist the matching local Piper selections',
   assert.throws(() => parseConfig({ dutchVoicePreset: 'Cori' }), /Invalid Dutch voice preset/);
 });
 
-test('configuration shows language and voice selectors before advanced options', () => {
-  const essentialProperties = Object.entries(manifest.instanceConfigSchema.properties)
-    .filter(([, property]) => !property['x-paperclip-advanced'])
-    .map(([key]) => key);
-  assert.deepEqual(essentialProperties, [
-    'generalVoiceBackend', 'realtimeApiKey', 'realtimeRegion', 'realtimeVoice',
-    'language', 'voicePreset', 'englishVoicePreset', 'dutchVoicePreset', 'norwegianVoicePreset',
-  ]);
+test('the settings schema provides dropdowns and accepts an object-shaped secret reference', () => {
+  const properties = manifest.instanceConfigSchema.properties;
+  for (const setting of ['generalVoiceBackend', 'realtimeRegion', 'realtimeVoice', 'language', 'voicePreset', 'englishVoicePreset', 'dutchVoicePreset', 'norwegianVoicePreset']) {
+    assert.ok(properties[setting].enum.length > 0, setting);
+  }
+  assert.equal(properties.realtimeApiKey.format, 'secret-ref');
+  assert.ok(properties.realtimeApiKey.anyOf.some(schema => schema.type === 'object' && schema.properties.type.const === 'secret_ref'));
+  assert.ok(!JSON.stringify(manifest.instanceConfigSchema).includes('x-paperclip-advanced'));
 });
 
 test('rejects untrusted audio types and oversized/malformed payloads', () => {

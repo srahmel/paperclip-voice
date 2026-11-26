@@ -40,6 +40,7 @@ type RealtimeLease = {
   expiry?: ReturnType<typeof setTimeout>;
 };
 const realtimeLeases = new Map<string, RealtimeLease>();
+const MISSING_REALTIME_SECRET = 'OpenAI Realtime braucht einen hinterlegten Schlüssel. Wähle unter „OpenAI Realtime API key“ ein Paperclip-Secret aus und speichere die Einstellungen.';
 const STATUS_MESSAGES: Record<string, Record<string, string>> = {
   de: {
     submitted: 'Gesendet.',
@@ -147,7 +148,7 @@ const plugin = definePlugin({
       const config = await configFor(companyId);
       if (config.generalVoiceBackend !== 'openai') throw new Error('OpenAI Realtime ist für diese Organisation deaktiviert.');
       const ref = config.realtimeApiKey;
-      if (ref?.type !== 'secret_ref') throw new Error('In der Voice-Konfiguration fehlt der OpenAI-API-Schlüssel.');
+      if (ref?.type !== 'secret_ref') throw new Error(MISSING_REALTIME_SECRET);
       const scope = `${companyId}/${ownerId}`;
       if (realtimeLeases.has(scope) || realtimeLeases.size >= MAX_ACTIVE_JOBS) {
         throw new Error('Es läuft bereits ein Sprachgespräch. Bitte zuerst beenden.');
@@ -156,7 +157,9 @@ const plugin = definePlugin({
       realtimeLeases.set(scope, lease);
       const resolveKey = () => ctx.secrets.resolve(ref, { companyId, configPath: 'realtimeApiKey' });
       try {
-        const apiKey = await resolveKey().catch(() => { throw new Error('Der OpenAI-API-Schlüssel konnte nicht aus Paperclip geladen werden.'); });
+        const apiKey = await resolveKey().catch(() => {
+          throw new Error('Paperclip konnte den ausgewählten Schlüssel nicht laden. Prüfe unter „Secrets“, ob der Schlüssel aktiv ist und zu dieser Organisation gehört.');
+        });
         const region = config.realtimeRegion;
         const { callId, answer } = await createRealtimeCall({
           offer: params.offer, region, language: allowedLanguage(params.language, config.language), voice: config.realtimeVoice, apiKey,
@@ -344,7 +347,13 @@ const plugin = definePlugin({
     });
   },
   async onValidateConfig(raw) {
-    try { parseConfig(raw); return { ok: true, errors: [], warnings: [] }; }
+    try {
+      const config = parseConfig(raw);
+      if (config.generalVoiceBackend === 'openai' && config.realtimeApiKey?.type !== 'secret_ref') {
+        return { ok: false, errors: [MISSING_REALTIME_SECRET], warnings: [] };
+      }
+      return { ok: true, errors: [], warnings: [] };
+    }
     catch (error) { return { ok: false, errors: [error instanceof Error ? error.message : String(error)], warnings: [] }; }
   },
   async onShutdown() {

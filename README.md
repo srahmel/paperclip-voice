@@ -22,8 +22,9 @@ recording and playback.
 ### OpenAI Realtime
 
 In the Voice plugin configuration select **openai** under **General voice mode**,
-bind **OpenAI Realtime API key** to a Paperclip company secret, and select the
-region matching the OpenAI project. **eu** is the default and requires an
+use **Create secret** or the existing-secret picker under **OpenAI Realtime API
+key**, and select the region matching the OpenAI project. **Test Configuration**
+checks that a secret is selected for OpenAI mode. **eu** is the default and requires an
 eligible EU project. **OpenAI Realtime voice** selects the conversation voice.
 The API key stays on the server. The browser streams live microphone audio to
 OpenAI over WebRTC, using billed OpenAI API usage. A call is limited to ten minutes.
@@ -121,8 +122,8 @@ where you can switch languages for dictation and spoken replies.
 **Use saved voice ID** preserves the existing German Piper voice or defaults
 to Thorsten. The Windows Piper setup helper installs the model and configuration
 file for every preset. Install missing models before selecting them on an
-existing host. Runtime paths and the saved German Piper voice ID are under
-**Advanced options**. The Moonshine hands-free pilot uses a German streaming model.
+existing host. The local runtime paths and saved German Piper voice ID are in the
+plugin configuration. The Moonshine hands-free pilot uses a German streaming model.
 
 The optional `voicebox` backend supports an existing loopback service. The old
 Docker recipe is not a prerequisite: its upstream image rejected anonymous

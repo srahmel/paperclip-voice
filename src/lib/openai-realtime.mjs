@@ -3,6 +3,14 @@ import { VOICE_LANGUAGES } from './voice-utils.mjs';
 const OPENAI_ORIGINS = { eu: 'https://eu.api.openai.com', global: 'https://api.openai.com' };
 export const REALTIME_SESSION_MS = 10 * 60_000;
 
+const CALL_ERRORS = {
+  400: 'OpenAI hat die Einstellungen der Sprachverbindung abgelehnt (HTTP 400). Prüfe das Realtime-Modell und die Region des API-Projekts.',
+  401: 'OpenAI hat den API-Schlüssel abgelehnt (HTTP 401). Wähle einen gültigen Schlüssel aus dem passenden OpenAI-Projekt.',
+  403: 'Das OpenAI-Projekt hat keinen Zugriff auf Realtime in der ausgewählten Region (HTTP 403). Prüfe die Projektberechtigungen und die Datenresidenz.',
+  404: 'OpenAI Realtime ist für dieses Projekt oder in der ausgewählten Region nicht verfügbar (HTTP 404). Prüfe Modell und Region.',
+  429: 'OpenAI hat ein Nutzungslimit erreicht (HTTP 429). Prüfe das API-Guthaben und die Limits des Projekts.',
+};
+
 export function realtimeConfig({ language, voice }) {
   return {
     type: 'realtime', model: 'gpt-realtime-2.1-mini', output_modalities: ['audio'],
@@ -59,7 +67,7 @@ export async function createRealtimeCall({ offer, region, language, voice, apiKe
   } catch {
     throw new Error('OpenAI Realtime ist nicht erreichbar. Bitte Verbindung und Region prüfen.');
   }
-  if (!response.ok) throw new Error(`OpenAI Realtime hat die Verbindung abgelehnt (HTTP ${response.status}). Bitte API-Projekt, Region und Abrechnung prüfen.`);
+  if (!response.ok) throw new Error(CALL_ERRORS[response.status] ?? `OpenAI Realtime konnte die Verbindung nicht starten (HTTP ${response.status}).`);
   const callId = response.headers.get('Location')?.match(/\/realtime\/calls\/([a-zA-Z0-9_-]{1,160})\/?$/)?.[1];
   const answer = await response.text();
   if (!callId || !/^v=0\r?\n/.test(answer)) throw new Error('OpenAI Realtime hat keine gültige Audioverbindung zurückgegeben.');

@@ -31,6 +31,15 @@ test('Realtime uses only the configured region and requests a conversational aud
   }
 });
 
+test('Realtime explains authentication, region and usage failures without exposing provider response bodies', async () => {
+  for (const [status, expected] of [[401, /API-Schlüssel.*abgelehnt/], [403, /ausgewählten Region/], [429, /Nutzungslimit/]]) {
+    await assert.rejects(createRealtimeCall({
+      offer: 'v=0\r\n', region: 'eu', voice: 'marin', apiKey: 'synthetic-key', language: 'de',
+      doFetch: async () => new Response('private diagnostic payload', { status }),
+    }), error => expected.test(error.message) && !error.message.includes('private diagnostic payload'));
+  }
+});
+
 test('existing plugin and dictation settings stay local unless the general provider is switched', () => {
   assert.equal(parseConfig({}).generalVoiceBackend, 'local');
   const config = parseConfig({ backend: 'voicebox', generalVoiceBackend: 'openai', language: 'nl' });
