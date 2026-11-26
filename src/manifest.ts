@@ -4,7 +4,7 @@ import { DEFAULT_VOICE_PRESET, GERMAN_VOICE_PRESETS, OTHER_VOICE_PRESETS, VOICE_
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.4.2',
+  version: '0.5.0',
   displayName: 'Paperclip Voice (Local)',
   description: 'Have a live voice conversation with OpenAI Realtime or dictate locally into Paperclip tasks.',
   author: 'paperclip-voice contributors',
@@ -44,6 +44,10 @@ const manifest: PaperclipPluginManifestV1 = {
         description: 'EU requires a compatible OpenAI project. The plugin uses the selected region only.',
       },
       realtimeVoice: { type: 'string', title: 'OpenAI Realtime voice', enum: ['marin', 'cedar', 'coral', 'verse'], default: 'marin' },
+      workspaceAccess: {
+        type: 'boolean', title: 'Paperclip workspace access in Voice', default: false,
+        description: 'Allow OpenAI Realtime to receive the Paperclip results needed to answer your requests. Voice uses the signed-in user’s permissions and asks before making changes.',
+      },
       backend: { type: 'string', title: 'Local audio engine', enum: ['python', 'voicebox'], default: 'python' },
       windowsSystemRoot: { type: 'string', title: 'Windows system directory', description: 'SystemRoot for the local Python processes on Windows.' },
       sttPython: { type: 'string', title: 'Whisper Python executable', description: 'Leave empty to use the existing PAPERCLIP_VOICE_PYTHON setting.' },

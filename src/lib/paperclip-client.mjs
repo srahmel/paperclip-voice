@@ -21,7 +21,7 @@ export async function paperclipApi(path, { method = 'GET', body, doFetch = fetch
     // Do not log or echo raw response bodies (potentially sensitive issue data).
     throw new Error(`Paperclip HTTP ${response.status}; the submission outcome may be unknown.`);
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 export async function ensureNativeAgentChat(companyId, agentRef, doFetch = fetch) {

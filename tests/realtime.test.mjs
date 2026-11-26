@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRealtimeCall } from '../src/lib/openai-realtime.mjs';
+import { createRealtimeCall, realtimeConfig } from '../src/lib/openai-realtime.mjs';
 import { createNativeVoiceTask } from '../src/lib/paperclip-client.mjs';
 import { approvedTaskWriter, readTaskProposal, taskApproval } from '../src/lib/realtime-task.mjs';
 import { parseConfig, realtimeAgentTarget } from '../src/lib/voice-utils.mjs';
@@ -46,6 +46,13 @@ test('existing plugin and dictation settings stay local unless the general provi
   assert.equal(config.backend, 'voicebox');
   assert.equal(config.language, 'nl');
   assert.throws(() => parseConfig({ realtimeRegion: 'https://example.test' }), /processing region/);
+});
+
+test('OpenAI receives the Paperclip workspace tools only for explicitly enabled configurations', () => {
+  const local = realtimeConfig({ language: 'de', voice: 'marin' });
+  assert.deepEqual(local.tools.map(tool => tool.name), ['propose_tasks']);
+  const workspace = realtimeConfig({ language: 'de', voice: 'marin', workspaceAccess: true });
+  assert.deepEqual(workspace.tools.map(tool => tool.name), ['propose_tasks', 'paperclip_read', 'paperclip_propose_change', 'paperclip_open']);
 });
 
 test('opening general Voice from a task restores the remembered agent for the current company', () => {
@@ -98,12 +105,18 @@ test('conversation proceeds immediately and a batch writes only after an audible
   const channel = { readyState: 'open', send: value => messages.push(JSON.parse(value)), close() {} };
   const messages = [];
   const writes = [];
+  const reads = [];
   const receipts = [];
   const stops = [];
   const track = { enabled: false, addEventListener() {}, stop() { stops.push('track'); } };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const events = { open: [] };
   t.mock.method(globalThis, 'fetch', async (url, request) => {
+    if (request.method === 'GET') {
+      reads.push(url);
+      const issue = { id: 'issue-1', identifier: 'TEST-1', companyId: 'company', title: 'Review the report', status: 'todo', privateMetadata: 'test payload excluded by projection' };
+      return Response.json(url.includes('?') ? [issue] : issue);
+    }
     writes.push({ url, body: JSON.parse(request.body) });
     return Response.json({ id: `issue-${writes.length}`, identifier: `TEST-${writes.length}`, companyId: 'company', assigneeAgentId: 'agent' });
   });
@@ -131,7 +144,7 @@ test('conversation proceeds immediately and a batch writes only after an audible
   });
 
   const conversation = startRealtimeConversation({
-    companyId: 'company', agentId: 'agent', language: 'en',
+    companyId: 'company', agentId: 'agent', language: 'en', workspaceAccess: true,
     connect: async payload => { events.open.push(payload); return { answer: 'v=0\r\n', sessionId: 'session' }; },
     disconnect: async payload => { stops.push(payload.sessionId); },
     onPhase() {}, onMicLevel() {}, onReply() {}, onTasks: ids => receipts.push(...ids),
@@ -164,9 +177,18 @@ test('conversation proceeds immediately and a batch writes only after an audible
   userTurn('question');
   assert.equal(messages.at(-1).type, 'response.create');
   assert.deepEqual(messages.at(-1).response, {});
-  done([{ type: 'message' }]);
+  done([{ type: 'function_call', name: 'paperclip_read', call_id: 'read_open', arguments: JSON.stringify({ resource: 'tasks' }) }]);
+  await turn();
+  assert.match(reads[0], /^\/api\/companies\/company\/issues\?/);
+  const overview = JSON.parse(messages.findLast(message => message.type === 'conversation.item.create').item.output);
+  assert.equal(overview.items[0].identifier, 'TEST-1');
+  assert.equal(overview.items[0].privateMetadata, undefined);
+  assert.deepEqual(overview.counts, { todo: 1 });
+  assert.equal(writes.length, 0);
+  done([]);
   event({ type: 'response.done', response: { status: 'cancelled', output: [call('cancelled')] } });
   done([call('decline')]);
+  await turn();
   assert.match(messages.at(-1).response.instructions, /Shall I create those 2 tasks/);
   assert.deepEqual(JSON.parse(messages.findLast(message => message.type === 'conversation.item.create').item.output), { status: 'awaiting_approval', count: 2 });
   assert.equal(messages.at(-2).session.audio.input.transcription.model, 'gpt-4o-mini-transcribe');
@@ -179,6 +201,7 @@ test('conversation proceeds immediately and a batch writes only after an audible
   done([]);
 
   done([call('agree')]);
+  await turn();
   playQuestion('agree');
   userTurn('approval');
   transcript('question', 'Yes.');
@@ -194,6 +217,18 @@ test('conversation proceeds immediately and a batch writes only after an audible
   transcript('approval', 'Yes.');
   await turn();
   assert.equal(writes.length, 2);
+  done([]);
+  userTurn('request_change');
+  done([{ type: 'function_call', name: 'paperclip_propose_change', call_id: 'change', arguments: JSON.stringify({ action: 'update_task', reference: 'TEST-1', status: 'done' }) }]);
+  await turn();
+  assert.match(messages.at(-1).response.instructions, /Update task.*TEST-1, done/);
+  assert.equal(writes.length, 2);
+  playQuestion('change');
+  userTurn('approve_change');
+  transcript('approve_change', 'Yes.');
+  await turn();
+  assert.deepEqual(writes[2], { url: '/api/issues/issue-1', body: { status: 'done' } });
+  assert.match(messages.at(-1).response.instructions, /Paperclip confirmed the change/);
   conversation.stop();
   assert.deepEqual(stops, ['track', 'peer', 'session']);
 });

@@ -36,9 +36,25 @@ create them. An affirmative answer after that question submits the proposed
 tasks through the signed-in user's normal Paperclip permissions. The selected
 agent receives those tasks. Voice gives the numbers Paperclip returns after
 successful saves. Voice enables Realtime input transcription only during the
-approval prompt to verify the reply. Ordinary conversation does not create a Paperclip chat
-or task. Voice has no access to agent chat history or existing tasks in a
-Realtime session.
+approval prompt to verify the reply. Ordinary conversation does not create a
+Paperclip chat or task.
+
+### Voice workspace access
+
+Enable **Paperclip workspace access in Voice** for a company that has approved
+sending the information needed for a request to the configured OpenAI region.
+Start a new general voice session after enabling the setting. Voice can look up
+open tasks, task details, comments, projects, goals, agents, run status, work
+approvals, routines, and agent chats using the signed-in user's Paperclip rights.
+For an overview, it reads the workspace directly and summarizes the results.
+It can open the corresponding Paperclip work pages during the conversation.
+
+After a spoken approval, Voice can update a task, post a comment, create or
+update a project or goal, message an agent, mark a task read or unread, start a
+routine, pause or resume an agent, cancel a run, and act on work approvals.
+The conversation confirms a successful operation only after Paperclip responds.
+Use the regular UI for irreversible deletions, security and billing approvals,
+and administration settings.
 
 ### Local conversations
 

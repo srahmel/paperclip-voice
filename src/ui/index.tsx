@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { useHostLocation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
+import { useHostLocation, useHostNavigation, usePluginAction, usePluginData, type PluginWidgetProps } from '@paperclipai/plugin-sdk/ui';
 import { createSpeechDetector, DEFAULT_SPEECH_LEVEL, rememberVoiceAgent, realtimeAgentTarget, routeTarget, vadDecision, voiceMessage, voiceSessionTarget, VOICE_LANGUAGES } from '../lib/voice-utils.mjs';
 import { audioBlobToBase64, audioBase64ToBuffer, waitForVoiceJob } from '../lib/plugin-audio.mjs';
 import { ensureNativeAgentChat, ensureAgentChatAvailable, resolveNativeTask, readNativeAgentChat, listVoiceTargets, readNativeComments, postNativeComment } from '../lib/paperclip-client.mjs';
@@ -90,11 +90,12 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const connectRealtime = usePluginAction('voice-realtime-connect');
   const disconnectRealtime = usePluginAction('voice-realtime-disconnect');
   type VoiceLanguage = keyof typeof VOICE_LANGUAGES;
-  const health = usePluginData<{ ready: boolean; streamingReady?: boolean; realtime?: boolean; language?: VoiceLanguage }>('voice-health', { companyId });
+  const health = usePluginData<{ ready: boolean; streamingReady?: boolean; realtime?: boolean; workspaceAccess?: boolean; language?: VoiceLanguage }>('voice-health', { companyId });
   const [opened, setOpened] = useState(false);
   const [phase, setPhaseState] = useState<Phase>('off');
   const phaseRef = useRef<Phase>('off');
   const { pathname } = useHostLocation();
+  const hostNavigation = useHostNavigation();
   const { drafts, navigation } = useVoiceMounts(companyId, pathname);
   const [mode, setModeState] = useState<'conversation' | 'dictation' | 'read'>('conversation');
   const [generalLauncher, setGeneralLauncher] = useState(false);
@@ -105,6 +106,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   const draftRef = useRef<DraftBinding | null>(null);
   const [targetOptions, setTargetOptions] = useState<Array<Target & { label: string }>>([]);
   const sessionPathRef = useRef<string | null>(null);
+  const voiceNavigationRef = useRef<string | null>(null);
   const [target, setTargetState] = useState<Target | null>(null);
   const targetRef = useRef<Target | null>(null);
   const [lastTranscript, setLastTranscript] = useState('');
@@ -163,6 +165,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     sessionActiveRef.current = false;
     epochRef.current += 1;
     sessionPathRef.current = null;
+    voiceNavigationRef.current = null;
     localConversationRef.current?.();
     localConversationRef.current = null;
     realtimeConversationRef.current?.stop();
@@ -250,6 +253,11 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
 
   // useHostLocation follows Paperclip's SPA navigation, including browser back.
   useLayoutEffect(() => {
+    if (realtimeConversationRef.current && voiceNavigationRef.current === pathname) {
+      voiceNavigationRef.current = null;
+      sessionPathRef.current = pathname;
+      return;
+    }
     teardown();
     draftRef.current = null; setMode('conversation');
     setOpened(false); setError(null); setLastTranscript(''); setLastReply('');
@@ -732,7 +740,9 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
   function startRealtimeSession() {
     if (!realtimeMode || !['off', 'error'].includes(phaseRef.current)) return;
     const selected = targetRef.current;
-    if (selected?.kind !== 'chat' || !targetOptions.some(option => option.kind === 'chat' && option.ref === selected.ref)) {
+    const defaultAgent = selected?.kind === 'chat' && targetOptions.some(option => option.kind === 'chat' && option.ref === selected.ref) ? selected.ref : '';
+    const workspaceAccess = health.data?.workspaceAccess === true;
+    if (!defaultAgent && !workspaceAccess) {
       setError('Wähle zuerst einen Agenten für mögliche Aufgaben.');
       return;
     }
@@ -748,7 +758,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     const epoch = epochRef.current;
     sessionPathRef.current = window.location.pathname;
     sessionActiveRef.current = true;
-    rememberVoiceAgent(companyId, selected.ref);
+    if (defaultAgent) rememberVoiceAgent(companyId, defaultAgent);
     let waitClip: AudioBuffer | undefined;
     if (health.data?.ready && typeof AudioContext !== 'undefined') {
       try {
@@ -767,7 +777,7 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
     };
     try {
       realtimeConversationRef.current = startRealtimeConversation({
-        companyId, agentId: selected.ref, language,
+        companyId, agentId: defaultAgent, language, workspaceAccess,
         connect: connectRealtime, disconnect: disconnectRealtime,
         onPhase(next) {
           if (!active(epoch)) return;
@@ -775,6 +785,15 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
           setPhase(next);
         },
         onMicLevel: showMicLevel, onReply: setLastReply, onTasks: setCreatedTasks, onError,
+        onNavigate(path) {
+          if (!active(epoch) || !context.companyPrefix) return false;
+          const destination = `/${encodeURIComponent(context.companyPrefix)}${path}`;
+          if (destination !== window.location.pathname) {
+            voiceNavigationRef.current = destination;
+            hostNavigation.navigate(destination);
+          }
+          return true;
+        },
         onPlaybackBlocked: setPlaybackBlocked,
         waitCue: () => waitClip ? playDecoded(waitClip, () => active(epoch) && phaseRef.current === 'saving') : Promise.resolve(),
       });
@@ -821,10 +840,10 @@ export function VoiceOverlay({ context }: PluginWidgetProps) {
         <h2 style={P.title}>{mode === 'dictation' ? 'Diktat' : mode === 'read' ? 'Antwort vorlesen' : 'Sprachmodus'}</h2>
         <button type="button" style={{ ...P.button, background: 'transparent', border: 0, fontSize: 20, padding: '2px 6px', margin: 0, color: 'var(--muted-foreground)' }} onClick={() => { teardown(); setOpened(false); }} aria-label="Panel schließen">×</button>
       </header>
-      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : realtimeMode ? 'Sprich mit Voice. Vor dem Anlegen der besprochenen Aufgaben fragt Voice einmal nach. Das Gesprächsaudio wird an OpenAI übertragen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
+      <p style={P.muted}>{mode === 'dictation' ? 'Diktieren oder eine Aufnahme importieren, Text prüfen und in diese Eingabe übernehmen. Absenden erfolgt über den normalen Sendebutton.' : mode === 'read' ? 'Die letzte Agentenantwort wird lokal vorgelesen.' : realtimeMode ? health.data?.workspaceAccess ? 'Frag nach Aufgaben, Projekten oder Agenten. Voice fragt vor Änderungen einmal nach. OpenAI erhält die für deine Anfrage benötigten Paperclip-Ergebnisse.' : 'Sprich mit Voice. Vor dem Anlegen der besprochenen Aufgaben fragt Voice einmal nach. Das Gesprächsaudio wird an OpenAI übertragen.' : 'Im Freisprechen liest Voice deine Nachricht vor und wartet auf dein Ja. Mit Vorschau kannst du das Transkript bearbeiten.'}</p>
       <p style={{ ...P.muted, margin: '12px 0', display: 'flex', alignItems: 'center', gap: 8 }} role="status">
         {(['listening', 'capturing', 'confirming'].includes(phase)) && <MicrophoneWave level={micLevel} capturing={phase === 'capturing'} />}
-        {({ off: 'Bereit zum Starten', starting: realtimeMode ? 'Sprachverbindung wird aufgebaut …' : 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: realtimeMode ? 'Warte auf deine Freigabe …' : 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', thinking: 'Voice antwortet gleich …', saving: 'Paperclip speichert …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
+        {({ off: 'Bereit zum Starten', starting: realtimeMode ? 'Sprachverbindung wird aufgebaut …' : 'Mikrofon wird geöffnet …', ready: 'Bereit', listening: listeningHint ? 'Noch keine Sprache erkannt. Prüfe das Mikrofon oder sprich näher hinein.' : 'Ich höre zu …', capturing: 'Sprache erkannt. Ich nehme auf …', transcribing: 'Transkribiere …', confirming: realtimeMode ? 'Warte auf deine Freigabe …' : 'Warte auf Ja, Nein oder Korrektur …', review: 'Transkript prüfen', sending: 'Sende an Paperclip …', submitted: 'Nachricht gesendet. Die Antwort erscheint in Paperclip.', waiting: 'Nachricht gesendet. Warte auf Agentenantwort …', thinking: 'Voice antwortet gleich …', saving: 'Paperclip verarbeitet die Änderung …', speaking: 'Sprachausgabe läuft …', error: 'Fehler' } as Record<Phase,string>)[phase]}
       </p>
       {!realtimeMode && <p style={P.muted}>Lokale Spracherkennung: {health.loading ? 'Wird geprüft …' : health.data?.ready ? 'Bereit' : 'Nicht erreichbar'}</p>}
       <label htmlFor="voice-language">Sprache</label>

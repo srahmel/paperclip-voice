@@ -52,11 +52,23 @@ export function taskSpeech(language) {
   return TASK_SPEECH[language] ?? TASK_SPEECH.de;
 }
 
+const CHANGE_RECEIPTS = {
+  de: ['Paperclip hat die Änderung bestätigt.', 'Ich konnte die Änderung in Paperclip nicht bestätigen.', 'Okay, ich ändere nichts.', 'Ich habe die Freigabe nicht sicher verstanden. Die Änderung wurde nicht ausgeführt.'],
+  en: ['Paperclip confirmed the change.', 'I could not confirm the change in Paperclip.', 'Okay, I won’t make the change.', 'I couldn’t verify your approval. The change was not submitted.'],
+  nl: ['Paperclip heeft de wijziging bevestigd.', 'Ik kon de wijziging in Paperclip niet bevestigen.', 'Oké, ik wijzig niets.', 'Ik kon je toestemming niet bevestigen. De wijziging is niet verstuurd.'],
+  no: ['Paperclip har bekreftet endringen.', 'Jeg kunne ikke bekrefte endringen i Paperclip.', 'Greit, jeg gjør ingen endring.', 'Jeg kunne ikke bekrefte godkjenningen. Endringen ble ikke sendt.'],
+};
+
+export function workspaceChangeSpeech(language) {
+  const [confirmed, unknown, declined, unclear] = CHANGE_RECEIPTS[language] ?? CHANGE_RECEIPTS.de;
+  return { confirmed, unknown, declined, unclear };
+}
+
 function taskKey(title, description) {
   return JSON.stringify([title, description]).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ');
 }
 
-export function readTaskProposal(raw) {
+export function readTaskProposal(raw, allowAssignee = false) {
   if (typeof raw !== 'string' || raw.length > 65_000) return [];
   let input;
   try { input = JSON.parse(raw)?.tasks; } catch { return []; }
@@ -67,7 +79,9 @@ export function readTaskProposal(raw) {
     const title = value.title.trim();
     const description = value.description.trim();
     if (!title || title.length > 240 || !description || description.length > 5000) return [];
-    tasks.set(taskKey(title, description), { title, description });
+    const assignee = allowAssignee && typeof value.assignee === 'string' ? value.assignee.trim() : undefined;
+    if (assignee && assignee.length > 160) return [];
+    tasks.set(taskKey(title, `${assignee ?? ''}\n${description}`), { title, description, assignee });
   }
   return [...tasks.values()];
 }
@@ -75,13 +89,14 @@ export function readTaskProposal(raw) {
 export function approvedTaskWriter({ companyId, agentId, saveTask = createNativeVoiceTask }) {
   const writes = new Map();
   return async (sessionId, proposalId, tasks) => {
-    const results = await Promise.all(tasks.map(({ title, description }, index) => {
-      const key = taskKey(title, description);
+    const results = await Promise.all(tasks.map(({ title, description, assigneeId }, index) => {
+      const ownerId = assigneeId || agentId;
+      const key = taskKey(title, `${ownerId}\n${description}`);
       const previous = writes.get(key);
       if (previous) return previous;
       // Keep uncertain results as well. A save may have committed before a network error.
       const result = Promise.resolve().then(() => saveTask({
-        companyId, agentId, title, description, idempotencyKey: `voice:${sessionId}:${proposalId}:${index}`,
+        companyId, agentId: ownerId, title, description, idempotencyKey: `voice:${sessionId}:${proposalId}:${index}`,
       })).catch(() => ({ status: 'unknown' }));
       writes.set(key, result);
       return result;

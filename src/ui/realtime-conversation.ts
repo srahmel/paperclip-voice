@@ -1,5 +1,6 @@
-import { approvedTaskWriter, readTaskProposal, taskApproval, taskSpeech } from '../lib/realtime-task.mjs';
+import { approvedTaskWriter, readTaskProposal, taskApproval, taskSpeech, workspaceChangeSpeech } from '../lib/realtime-task.mjs';
 import { CONFIRMATION_TIMEOUT_MS } from '../lib/voice-confirmation.mjs';
+import { createVoiceWorkspace, workspaceErrorCode } from '../lib/paperclip-workspace.mjs';
 
 type Phase = 'listening' | 'capturing' | 'thinking' | 'confirming' | 'saving' | 'speaking';
 type Action = (params: Record<string, unknown>) => Promise<unknown>;
@@ -11,32 +12,37 @@ type RealtimeEvent = {
   transcript?: string;
   response?: { id?: string; metadata?: Record<string, string>; status?: string; output?: EventItem[] };
 };
-type PendingTasks = {
+type PreparedTask = ReturnType<typeof readTaskProposal>[number] & { assigneeId?: string; assigneeName?: string };
+type PreparedChange = Awaited<ReturnType<ReturnType<typeof createVoiceWorkspace>['prepare']>>;
+type PendingApproval = {
   proposalId: string;
-  tasks: ReturnType<typeof readTaskProposal>;
   questionId?: string;
   asked?: boolean;
   inputId?: string;
   committed?: boolean;
-};
+} & ({ kind: 'tasks'; tasks: PreparedTask[] } | { kind: 'change'; change: PreparedChange });
 
 export function startRealtimeConversation(options: {
   companyId: string;
   agentId: string;
   language: string;
+  workspaceAccess?: boolean;
   connect: Action;
   disconnect: Action;
   onPhase: (phase: Phase) => void;
   onMicLevel: (level: number) => void;
   onReply: (text: string) => void;
   onTasks: (identifiers: string[]) => void;
+  onNavigate?: (path: string) => boolean;
   onError: (error: unknown) => void;
   onPlaybackBlocked: (blocked: boolean) => void;
   waitCue: () => Promise<void>;
 }) {
   const { companyId, agentId, language } = options;
   const writeTasks = approvedTaskWriter({ companyId, agentId });
+  const workspace = options.workspaceAccess ? createVoiceWorkspace({ companyId, language }) : null;
   const speech = taskSpeech(language);
+  const changeSpeech = workspaceChangeSpeech(language);
   const audio = new Audio();
   audio.autoplay = true;
   audio.setAttribute('playsinline', '');
@@ -53,7 +59,7 @@ export function startRealtimeConversation(options: {
   let responding = false;
   let saving = false;
   let speechTurns = 0;
-  let pendingTasks: PendingTasks | undefined;
+  let pendingTasks: PendingApproval | undefined;
   let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
   let queuedResponse: Record<string, unknown> | undefined;
   const startup = setTimeout(() => fail(new Error('Die Audioverbindung konnte nicht rechtzeitig starten.')), 30_000);
@@ -129,31 +135,74 @@ export function startRealtimeConversation(options: {
     }, CONFIRMATION_TIMEOUT_MS);
   }
 
-  function proposeTasks(items: EventItem[]) {
+  async function handleTools(items: EventItem[]) {
     const calls = items.filter(item => item.type === 'function_call' && typeof item.call_id === 'string' && !seen.has(item.call_id));
     if (!calls.length) return;
-    const call = calls[0];
-    const proposalId = call.call_id!;
-    const tasks = calls.length === 1 && call.name === 'propose_tasks' && /^[a-zA-Z0-9_-]{1,160}$/.test(proposalId) && !talking && !saving
-      ? readTaskProposal(call.arguments) : [];
-    for (const item of calls) {
+    const turn = speechTurns;
+    const proposalCount = calls.filter(item => item.name === 'propose_tasks' || item.name === 'paperclip_propose_change').length;
+    let draft: PendingApproval | undefined;
+    let prompt: string | undefined;
+    const results = await Promise.all(calls.map(async item => {
       const callId = item.call_id!;
       seen.add(callId);
+      if (stopped || talking || !/^[a-zA-Z0-9_-]{1,160}$/.test(callId)) {
+        return { callId, output: { status: 'not_proposed', reason: 'interrupted_or_invalid_call' } };
+      }
+      if (item.name === 'paperclip_read' && workspace) {
+        return { callId, output: await workspace.read(item.arguments) };
+      }
+      try {
+        if (item.name === 'paperclip_open' && workspace) {
+          const path = await workspace.destination(item.arguments);
+          const opened = !stopped && !talking && speechTurns === turn && options.onNavigate?.(path);
+          return { callId, output: { status: opened ? 'opened' : 'not_opened' } };
+        }
+        if (saving || proposalCount !== 1) throw new Error('one_proposal_at_a_time');
+        if (item.name === 'paperclip_propose_change' && workspace) {
+          const change = await workspace.prepare(item.arguments);
+          draft = { proposalId: callId, kind: 'change', change };
+          prompt = change.prompt;
+          return { callId, output: { status: 'awaiting_approval' } };
+        }
+        if (item.name === 'propose_tasks') {
+          const proposed = readTaskProposal(item.arguments, Boolean(workspace));
+          if (!proposed.length) throw new Error('invalid_task_details');
+          const tasks = await Promise.all(proposed.map(async task => {
+            if (task.assignee && workspace) {
+              const agent = await workspace.resolveAssignee(task.assignee);
+              return { ...task, assigneeId: agent.id, assigneeName: String(agent.name) };
+            }
+            if (!agentId) throw new Error('assignee_required');
+            return { ...task, assigneeName: undefined };
+          }));
+          draft = { proposalId: callId, kind: 'tasks', tasks };
+          const assignees = [...new Set(tasks.map(task => task.assigneeName).filter(Boolean))];
+          prompt = [assignees.join(', ').slice(0, 140), speech.ask(tasks.length)].filter(Boolean).join('. ');
+          return { callId, output: { status: 'awaiting_approval', count: tasks.length } };
+        }
+        throw new Error('unsupported_tool');
+      } catch (error) {
+        return { callId, output: { status: 'not_proposed', reason: workspaceErrorCode(error) } };
+      }
+    }));
+    const current = !stopped && !talking && turn === speechTurns;
+    for (const { callId, output } of results) {
       send({ type: 'conversation.item.create', item: {
         type: 'function_call_output', call_id: callId,
-        output: JSON.stringify(tasks.length ? { status: 'awaiting_approval', count: tasks.length } : { status: 'not_proposed' }),
+        output: JSON.stringify(current ? output : { status: 'superseded' }),
       } });
     }
-    if (tasks.length) {
+    if (!current) return;
+    if (draft && prompt) {
       clearPendingTasks();
-      pendingTasks = { proposalId, tasks };
+      pendingTasks = draft;
       setApprovalTranscription(true);
       countDownConfirmation();
-      say(speech.ask(tasks.length), proposalId);
+      say(prompt, draft.proposalId);
     } else if (!talking && !saving) reply();
   }
 
-  async function saveApproved(draft: PendingTasks) {
+  async function saveApproved(draft: PendingApproval) {
     const id = sessionId;
     if (!id || stopped) return;
     const turn = speechTurns;
@@ -164,12 +213,23 @@ export function startRealtimeConversation(options: {
       if (!stopped && speechTurns === turn && !talking) cue = options.waitCue().catch(() => undefined);
     }, 1600);
     try {
-      const { identifiers, unknownCount } = await writeTasks(id, draft.proposalId, draft.tasks);
+      let receipt: string;
+      let identifiers: string[] = [];
+      if (draft.kind === 'tasks') {
+        const result = await writeTasks(id, draft.proposalId, draft.tasks);
+        identifiers = result.identifiers;
+        receipt = [identifiers.length ? speech.receipt(identifiers) : '', result.unknownCount ? speech.unknown : ''].filter(Boolean).join(' ');
+      } else {
+        try {
+          await draft.change.execute(crypto.randomUUID());
+          receipt = changeSpeech.confirmed;
+        } catch { receipt = changeSpeech.unknown; }
+      }
       clearTimeout(timer);
       await cue;
       if (stopped) return;
       if (identifiers.length) options.onTasks(identifiers);
-      if (speechTurns === turn && !talking) say([identifiers.length ? speech.receipt(identifiers) : '', unknownCount ? speech.unknown : ''].filter(Boolean).join(' '));
+      if (speechTurns === turn && !talking) say(receipt);
     } finally {
       clearTimeout(timer);
       saving = false;
@@ -180,10 +240,11 @@ export function startRealtimeConversation(options: {
     const draft = pendingTasks;
     if (!draft?.committed || draft.inputId !== itemId) return;
     clearPendingTasks();
-    if (transcript === undefined) { say(speech.unclear); return; }
+    const wording = draft.kind === 'tasks' ? speech : changeSpeech;
+    if (transcript === undefined) { say(wording.unclear); return; }
     const decision = taskApproval(transcript, language);
     if (decision === 'approve') void saveApproved(draft).catch(fail);
-    else if (decision === 'discard') say(speech.declined);
+    else if (decision === 'discard') say(wording.declined);
     else reply();
   }
 
@@ -252,7 +313,7 @@ export function startRealtimeConversation(options: {
       case 'response.done':
         responding = false;
         if (event.response?.status === 'completed') {
-          proposeTasks(event.response.output ?? []);
+          void handleTools(event.response.output ?? []).catch(fail);
         } else if (event.response?.status === 'failed' || event.response?.status === 'incomplete') {
           fail(new Error('OpenAI Realtime konnte die Antwort nicht fertigstellen.'));
         }

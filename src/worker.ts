@@ -138,9 +138,9 @@ const plugin = definePlugin({
       const realtime = config.generalVoiceBackend === 'openai';
       try {
         const ready = config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl });
-        return { ready, streamingReady: ready && localStreamReady(config), realtime, language: config.language };
+        return { ready, streamingReady: ready && localStreamReady(config), realtime, workspaceAccess: config.workspaceAccess, language: config.language };
       }
-      catch { return { ready: false, realtime, language: config.language }; }
+      catch { return { ready: false, realtime, workspaceAccess: config.workspaceAccess, language: config.language }; }
     });
 
     ctx.actions.register('voice-realtime-connect', async (params, auth) => {
@@ -163,6 +163,7 @@ const plugin = definePlugin({
         const region = config.realtimeRegion;
         const { callId, answer } = await createRealtimeCall({
           offer: params.offer, region, language: allowedLanguage(params.language, config.language), voice: config.realtimeVoice, apiKey,
+          workspaceAccess: config.workspaceAccess,
         });
         lease.close = async () => {
           clearTimeout(lease.expiry);

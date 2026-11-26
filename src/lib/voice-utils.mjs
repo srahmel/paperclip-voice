@@ -17,6 +17,7 @@ export const OTHER_VOICE_PRESETS = Object.freeze({
 const DEFAULTS = Object.freeze({
   backend: 'python',
   generalVoiceBackend: /** @type {'local' | 'openai'} */ ('local'),
+  workspaceAccess: /** @type {boolean} */ (false),
   realtimeRegion: /** @type {'eu' | 'global'} */ ('eu'),
   realtimeVoice: /** @type {'marin' | 'cedar' | 'coral' | 'verse'} */ ('marin'),
   realtimeApiKey: /** @type {import('@paperclipai/plugin-sdk').EnvSecretRefBinding | undefined} */ (undefined),
@@ -57,6 +58,7 @@ export function parseConfig(raw = {}) {
   const config = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
   if (!['python', 'voicebox'].includes(config.backend)) throw new Error('Invalid audio backend');
   if (!['local', 'openai'].includes(config.generalVoiceBackend)) throw new Error('Invalid general voice backend');
+  if (typeof config.workspaceAccess !== 'boolean') throw new Error('Invalid Paperclip workspace access setting');
   if (!['eu', 'global'].includes(config.realtimeRegion)) throw new Error('Invalid OpenAI processing region');
   if (!['marin', 'cedar', 'coral', 'verse'].includes(config.realtimeVoice)) throw new Error('Invalid OpenAI Realtime voice');
   for (const key of ['sttPython', 'sttModelDir', 'ttsPython', 'ttsModelDir', 'windowsSystemRoot', 'moonshinePython', 'moonshineModelDir']) if (config[key] !== undefined && typeof config[key] !== 'string') throw new Error('Invalid local runtime setting');
