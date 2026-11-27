@@ -4,7 +4,7 @@ import { DEFAULT_VOICE_PRESET, GERMAN_VOICE_PRESETS, OTHER_VOICE_PRESETS, VOICE_
 const manifest: PaperclipPluginManifestV1 = {
   id: 'paperclip-plugin-voice',
   apiVersion: 1,
-  version: '0.5.0',
+  version: '0.5.1',
   displayName: 'Paperclip Voice (Local)',
   description: 'Have a live voice conversation with OpenAI Realtime or dictate locally into Paperclip tasks.',
   author: 'paperclip-voice contributors',
@@ -47,6 +47,10 @@ const manifest: PaperclipPluginManifestV1 = {
       workspaceAccess: {
         type: 'boolean', title: 'Paperclip workspace access in Voice', default: false,
         description: 'Allow OpenAI Realtime to receive the Paperclip results needed to answer your requests. Voice uses the signed-in user’s permissions and asks before making changes.',
+      },
+      localHandsFree: {
+        type: 'boolean', title: 'Local hands-free mode', default: false,
+        description: 'Offer local hands-free conversations and allow listening to resume automatically after an agent reply.',
       },
       backend: { type: 'string', title: 'Local audio engine', enum: ['python', 'voicebox'], default: 'python' },
       windowsSystemRoot: { type: 'string', title: 'Windows system directory', description: 'SystemRoot for the local Python processes on Windows.' },

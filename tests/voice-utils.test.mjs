@@ -13,6 +13,14 @@ test('configuration defaults to local German speech', () => {
   assert.equal(c.voice, 'de_DE-thorsten-medium');
 });
 
+test('local hands-free mode is off for existing settings and can be enabled explicitly', () => {
+  const { localHandsFree } = manifest.instanceConfigSchema.properties;
+  assert.deepEqual({ type: localHandsFree.type, default: localHandsFree.default }, { type: 'boolean', default: false });
+  assert.equal(parseConfig({ generalVoiceBackend: 'openai' }).localHandsFree, false);
+  assert.equal(parseConfig({ localHandsFree: true }).localHandsFree, true);
+  assert.throws(() => parseConfig({ localHandsFree: 'true' }), /Invalid local hands-free setting/);
+});
+
 test('the German voice dropdown selects a Piper model and preserves saved voice IDs', () => {
   const { voicePreset } = manifest.instanceConfigSchema.properties;
   const saved = { voice: 'de_DE-thorsten-high' };

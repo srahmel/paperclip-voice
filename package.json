@@ -1,6 +1,6 @@
 {
   "name": "paperclip-plugin-voice",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Paperclip voice conversations with OpenAI Realtime and local task dictation with Whisper.",
   "license": "MIT",

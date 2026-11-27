@@ -6,7 +6,10 @@ const actions = new Map();
 const data = new Map();
 let reads = 0;
 await plugin.definition.setup({
-  config: { get: async () => ({ backend: 'python', sttPython: '/missing-voice-test-runtime' }) },
+  config: { get: async companyId => ({
+    backend: 'python', sttPython: '/missing-voice-test-runtime',
+    ...(companyId === 'company-hands-free' ? { localHandsFree: true } : {}),
+  }) },
   actions: { register: (key, action) => actions.set(key, action) },
   data: { register: (key, reader) => data.set(key, reader) },
   issues: { get: async () => { reads++; return null; }, listComments: async () => [] },
@@ -31,11 +34,16 @@ test('audio job status and cancellation require the original company and user', 
   await assert.rejects(actions.get('voice-poll')(params, auth), /not found/);
 });
 
-test('hands-free stream actions require the matching human company and an installed local model', async () => {
+test('hands-free streams require the matching human company, an enabled setting and a local model', async () => {
   const start = actions.get('voice-stream-start');
   const update = actions.get('voice-stream-update');
+  const health = data.get('voice-health');
   await assert.rejects(start({ companyId: 'company-b' }, auth), /authenticated company user/);
-  await assert.rejects(start({ companyId: 'company-a' }, auth), /not configured/);
+  await assert.rejects(start({ companyId: 'company-a' }, auth), /deaktiviert/);
+  assert.equal((await health({ companyId: 'company-a' })).localHandsFree, false);
+  const enabled = { companyId: 'company-hands-free' };
+  assert.equal((await health(enabled)).localHandsFree, true);
+  await assert.rejects(start(enabled, { ...auth, ...enabled }), /not configured/);
   await assert.rejects(update({ companyId: 'company-a', streamId: 'unknown', command: 'audio', audioBase64: 'AA==' }, auth), /not found/);
 });
 

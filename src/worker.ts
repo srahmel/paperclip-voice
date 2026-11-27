@@ -135,12 +135,13 @@ const plugin = definePlugin({
     ctx.data.register('voice-health', async (params) => {
       const companyId = requiredString(params, 'companyId');
       const config = await configFor(companyId);
-      const realtime = config.generalVoiceBackend === 'openai';
+      const { language, localHandsFree, workspaceAccess } = config;
+      const health = { language, localHandsFree, workspaceAccess, realtime: config.generalVoiceBackend === 'openai' };
       try {
         const ready = config.backend === 'python' ? localAudioReady(config) : await voiceboxHealth({ baseUrl: config.voiceboxUrl });
-        return { ready, streamingReady: ready && localStreamReady(config), realtime, workspaceAccess: config.workspaceAccess, language: config.language };
+        return { ...health, ready, streamingReady: localHandsFree && ready && localStreamReady(config) };
       }
-      catch { return { ready: false, realtime, workspaceAccess: config.workspaceAccess, language: config.language }; }
+      catch { return { ...health, ready: false }; }
     });
 
     ctx.actions.register('voice-realtime-connect', async (params, auth) => {
@@ -190,6 +191,7 @@ const plugin = definePlugin({
     ctx.actions.register('voice-stream-start', async (params, auth) => {
       const scope = requireScope(params, auth);
       const config = await configFor(scope.companyId);
+      if (!config.localHandsFree) throw new Error('Lokales Freisprechen ist für diese Organisation deaktiviert.');
       if (!localStreamReady(config)) throw new Error('Local streaming speech recognition is not configured');
       if (streams.size >= MAX_ACTIVE_JOBS || [...streams.values()].some(stream => stream.companyId === scope.companyId && stream.ownerId === scope.ownerId)) {
         throw new Error('Another hands-free session is already active');

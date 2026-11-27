@@ -61,7 +61,12 @@ and administration settings.
 With **General voice mode** set to **local**, choose an agent chat or a recent
 task as the destination. Opening Voice from a task also uses the local flow.
 
-- Choose **Freisprechen starten**, then speak and pause. Voice reads back the
+**Local hands-free mode** is off by default. To enable it for your organization,
+open **Settings → Plugins → Paperclip Voice (Local) → Configuration**, turn on
+the setting and save. This also enables the option to resume listening after a
+reply. Open the Voice panel to start a session.
+
+- When enabled, choose **Freisprechen starten**, then speak and pause. Voice reads back the
   transcript before sending a question or task. Say **Ja** or **Ja, senden**
   to send, **Nein** to discard, or **Korrektur** followed by the replacement
   message. A confirmation expires after 30 seconds.
